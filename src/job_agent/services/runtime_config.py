@@ -11,7 +11,7 @@ from job_agent.models.base import StrictModel
 from job_agent.services.profile_store import write_json_atomic
 
 
-AIProviderId = Literal["local", "openai", "openai_compatible"]
+AIProviderId = Literal["local", "codex", "openai", "openai_compatible"]
 SearchProviderId = Literal["none", "bocha", "brave"]
 MapProviderId = Literal["none", "amap"]
 
@@ -71,6 +71,10 @@ class AIConnectorConfig(StrictModel):
             normalized["model"] = str(normalized.get("model") or "local-explainable-v1")
             normalized["base_url"] = None
             normalized["api_key"] = ""
+        elif provider == "codex":
+            normalized["base_url"] = None
+            normalized["api_key"] = ""
+            normalized["model"] = str(normalized.get("model") or "codex-default")
         elif provider == "openai":
             normalized["base_url"] = None
         return normalized
@@ -218,7 +222,7 @@ def update_runtime_config(path: Path, update: RuntimeConfigUpdate) -> RuntimeCon
 def _environment_runtime_config() -> RuntimeConfig:
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ai_provider = os.getenv("JOB_AGENT_AI_PROVIDER", "").strip().casefold()
-    if ai_provider not in {"local", "openai", "openai_compatible"}:
+    if ai_provider not in {"local", "codex", "openai", "openai_compatible"}:
         ai_provider = "openai" if openai_key else "local"
     ai_model = os.getenv("JOB_AGENT_AI_MODEL", os.getenv("OPENAI_MODEL", "")).strip()
     if not ai_model:
@@ -308,6 +312,9 @@ def public_runtime_config(
         "::1",
     }
     ai_ready = config.ai.provider == "local" or bool(config.ai.api_key) or local_compatible
+    if config.ai.provider == "codex":
+        from job_agent.services.codex_bridge import find_codex_executable
+        ai_ready = find_codex_executable() is not None
     search_enabled = config.search.provider != "none"
     maps_enabled = config.maps.provider != "none"
     public: dict[str, object] = {
@@ -336,7 +343,7 @@ def public_runtime_config(
             "monthly_quota": config.maps.monthly_quota,
         },
         "supported": {
-            "ai": ["local", "openai", "openai_compatible"],
+            "ai": ["local", "codex", "openai", "openai_compatible"],
             "search": ["none", "bocha", "brave"],
             "maps": ["none", "amap"],
         },

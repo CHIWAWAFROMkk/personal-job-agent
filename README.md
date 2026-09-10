@@ -12,7 +12,7 @@
 - 读取 TXT、Markdown、DOCX、PDF 简历
 - 读取原始 JD
 - 生成可解释的匹配评分与硬门槛检查
-- 使用可替换的 AI Provider 接口做结构化 JD 分析：本地规则、OpenAI、OpenAI 兼容 API
+- 使用可替换的 AI Provider 接口做结构化 JD 分析：本地规则、本机 Codex、OpenAI、OpenAI 兼容 API
 - 独立配置博查或 Brave Search；不连接搜索 API 时仍可手动导入 JD
 - 搜索候选岗位、去重并保存到 SQLite 岗位库
 - 从岗位编号一键生成可追溯的投递材料包，并自动关联已有定向 STAR 简历
@@ -26,13 +26,18 @@
 
 ## Windows 桌面版（推荐）
 
-桌面发行包是 `dist/PersonalJobAgent-0.8.1-Windows-x64-<构建时间>.zip`。对方不需要安装
+桌面发行包是 `dist/PersonalJobAgent-0.8.2-Windows-x64-<构建时间>.zip`。对方不需要安装
 Python：完整解压后双击 `PersonalJobAgent.exe`，程序会在独立 Windows 窗口中
 打开，不会占用浏览器标签页。
 
-0.8.1 将首页主路径扩展为“实习/校招机会 → 查看证据与边界 → 定向简历 / 项目工坊 → 本人投递 → 有效反馈”：
-待确认队列不再被隐性截断，岗位列表增加稳定列层级和优先顺序；桌面、小屏与横屏均
-保留清楚焦点和可操作热区，并支持系统“减少动态效果”偏好。
+0.8.2 新增本机 Codex 接入、根据完整已确认经历库生成 JD 定向简历、黑白 A4
+默认模板，以及已投递岗位筛选与分组。对话可以分析简历并提供带占位符的写作模板；
+AI 写作失败时会明确提示本地回退。详细变化见 [更新记录](CHANGELOG.md)。
+
+使用 Codex 时，需要另外安装并登录本机 Codex CLI，并具备可用模型权限与额度。
+在设置中选择 Codex，模型可填写 `codex-default`；无需填写或复制 API Key。
+程序通过临时 CLI 会话请求文本回答，不读取或复制登录凭据文件。其他 AI Provider
+和本地规则仍可独立使用。
 
 每位 Windows 用户的 Profile、简历、API Key、SQLite 岗位库和投递记录默认
 保存在自己的 `%LOCALAPPDATA%\PersonalJobAgent`，不会写进程序目录。把发行 ZIP

@@ -354,10 +354,11 @@ def _entry_from_experience(
 
 
 def _short_organization(value: str) -> str:
+    shortened = re.sub(r"[（(]上海[）)]", "", value)
     shortened = re.sub(
         r"(?:企业管理|信息技术|科技股份|科技|股份)?有限公司$",
         "",
-        value,
+        shortened,
     )
     return shortened.strip() or value
 
@@ -366,10 +367,20 @@ def _entry_identity(
     experience: Experience,
     selected_facts: list[EvidenceFact],
 ) -> tuple[str, str]:
+    if experience.kind == ExperienceKind.PROJECT and experience.role.endswith("项目组长"):
+        project_name = experience.role[: -len("项目组长")].strip()
+        if project_name:
+            return project_name, "项目组长"
+    if experience.kind == ExperienceKind.COMPETITION and any(
+        "生成式 AI" in fact.statement for fact in selected_facts
+    ):
+        return "生成式 AI 校园应用研究", experience.role
     return experience.organization or experience.role, experience.role
 
 
 def _summary_role(experience: Experience) -> str:
+    if "HR数字化" in experience.role.replace(" ", ""):
+        return "HR 数字化"
     return experience.role.replace("实习", "").strip()
 
 

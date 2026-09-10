@@ -107,7 +107,10 @@ class PortableResumeTests(unittest.TestCase):
         # 匹配分属内部排序数据，不得出现在投递简历正文
         from docx import Document
 
-        docx_text = "\n".join(p.text for p in Document(str(files.docx)).paragraphs)
+        document = Document(str(files.docx))
+        docx_text = "\n".join(p.text for p in document.paragraphs) + "\n" + "\n".join(
+            p.text for table in document.tables for row in table.rows for cell in row.cells for p in cell.paragraphs
+        )
         self.assertNotIn("匹配", docx_text)
         self.assertNotIn("/100", docx_text)
         self.assertNotIn("match_score", json.dumps(content, ensure_ascii=False))

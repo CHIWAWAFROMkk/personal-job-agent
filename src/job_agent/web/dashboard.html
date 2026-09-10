@@ -511,7 +511,7 @@
             <h3 class="form-section-title">投入边界</h3>
             <div class="form-grid">
               <div class="field">
-                <label for="preferenceDailyPayFloor">日常实习日薪底线（元）</label>
+                <label for="preferenceDailyPayFloor">实习机会日薪底线（元）</label>
                 <input id="preferenceDailyPayFloor" type="number" min="0" max="5000" step="1" placeholder="180">
                 <div class="form-help">低于底线不会偷偷删除；会标成“人工破例”，由你判断公司和相关性是否值得。</div>
               </div>
@@ -577,7 +577,8 @@
             <h3 class="form-section-title">简历模板</h3>
             <div class="field full">
               <select id="editorTemplate">
-                <option value="mono-photo">黑白直聘风 · 编号列表带头照位（默认）</option>
+                <option value="reference-a4">经典版式 · 黑白 A4 单页（默认）</option>
+                <option value="mono-photo">黑白直聘原版 · 小幅面</option>
                 <option value="portable-evidence-resume-v1">便携证据版 · 经典（旧版式）</option>
                 <option value="minimal-mono">极简墨 · 黑白极简单栏</option>
                 <option value="classic-centered">经典中 · 居中标题单栏</option>
@@ -655,6 +656,7 @@
                 <label for="aiProvider">服务类型</label>
                 <select id="aiProvider" required>
                   <option value="local">本地规则 · 免费且无需密钥</option>
+                  <option value="codex">Codex · 使用本机已登录账号</option>
                   <option value="openai">OpenAI API</option>
                   <option value="openai_compatible">OpenAI 兼容 API · DeepSeek / 通义 / Kimi / 本地模型等</option>
                 </select>
@@ -662,6 +664,7 @@
               <div id="aiModelField" class="field conditional-field">
                 <label for="aiModel">模型名称</label>
                 <input id="aiModel" maxlength="160" placeholder="例如 gpt-5.6-luna 或 deepseek-chat">
+                <div id="codexHelp" class="form-help" hidden>使用本机 Codex CLI 的登录与额度，无需填写 API Key。用于对话、JD 分析与简历写作；不会执行电脑操作。</div>
               </div>
               <div id="aiBaseUrlField" class="field conditional-field" hidden>
                 <label for="aiBaseUrl">兼容 API 地址</label>
@@ -1000,6 +1003,7 @@
 
     const aiProviderLabels = {
       local: "本地规则",
+      codex: "Codex",
       openai: "OpenAI",
       openai_compatible: "兼容 API"
     };
@@ -1031,8 +1035,9 @@
       const usesCloudAi = aiProvider !== "local";
       const usesCompatible = aiProvider === "openai_compatible";
       elements.aiModelField.hidden = !usesCloudAi;
-      elements.aiKeyField.hidden = !usesCloudAi;
-      elements.clearAiKeyRow.hidden = !usesCloudAi;
+      elements.aiKeyField.hidden = !usesCloudAi || aiProvider === "codex";
+      elements.clearAiKeyRow.hidden = !usesCloudAi || aiProvider === "codex";
+      document.getElementById("codexHelp").hidden = aiProvider !== "codex";
       elements.aiBaseUrlField.hidden = !usesCompatible;
       elements.aiModel.required = usesCloudAi;
       elements.aiBaseUrl.required = usesCompatible;
@@ -1080,10 +1085,10 @@
 
       elements.aiStatusTitle.textContent = ai.provider === "local"
         ? "本地能力可用"
-        : ai.ready ? "AI 已配置" : "等待密钥";
+        : ai.ready ? "AI 已配置" : ai.provider === "codex" ? "未找到 Codex CLI" : "等待密钥";
       elements.aiStatusDetail.textContent = ai.provider === "local"
         ? "本地可解释评分，不产生 API 费用"
-        : `${aiProviderLabels[ai.provider] || ai.provider} · ${ai.model || "模型未填写"}${ai.api_key_configured ? " · 密钥已保存，首次调用时验证" : ""}`;
+        : `${aiProviderLabels[ai.provider] || ai.provider} · ${ai.model || "模型未填写"}${ai.provider === "codex" ? " · 使用本机登录，首次调用时验证" : ai.api_key_configured ? " · 密钥已保存，首次调用时验证" : ""}`;
       elements.aiStatusDot.classList.toggle("ready", Boolean(ai.ready));
 
       elements.searchStatusTitle.textContent = !search.enabled
@@ -1453,20 +1458,21 @@
       currentJobs = jobs;
       const query = $("jobSearch").value.trim().toLocaleLowerCase();
       const visible = jobs.filter((job) => {
-        const pending = pendingStatuses.has(job.status);
+        const pending = !job.has_applied && pendingStatuses.has(job.status);
         return (jobTrack === "all" || jobTrack === null || job.opportunity_track === jobTrack)
-          && (jobFilter === "all" || (jobFilter === "pending" ? pending : !pending))
+          && (jobFilter === "all" || (jobFilter === "pending" ? pending : job.has_applied))
           && (job.company + " " + job.title + " #" + job.job_id).toLocaleLowerCase().includes(query);
-      });
+      }).sort((a, b) => Number(Boolean(a.has_applied)) - Number(Boolean(b.has_applied)));
       elements.jobsCount.textContent = String(visible.length);
       document.querySelectorAll("[data-job-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobFilter === jobFilter)));
       document.querySelectorAll("[data-job-track]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobTrack === jobTrack)));
-      elements.jobs.innerHTML = visible.length ? visible.map(job => `
-        <button class="job-choice" type="button" data-select-job="${job.job_id}" aria-current="${String(job.job_id) === String(selectedJobId) ? "true" : "false"}">
+      elements.jobs.innerHTML = visible.length ? visible.map((job, index) => `
+        ${jobFilter === "all" && (index === 0 || Boolean(job.has_applied) !== Boolean(visible[index - 1].has_applied)) ? `<h3 class="job-group-title">${job.has_applied ? "已投递" : "待投递与其他岗位"} · ${visible.filter(item => Boolean(item.has_applied) === Boolean(job.has_applied)).length}</h3>` : ""}
+        <button class="job-choice${job.has_applied ? " is-applied" : ""}" type="button" data-select-job="${job.job_id}" aria-current="${String(job.job_id) === String(selectedJobId) ? "true" : "false"}">
           <strong class="choice-title">${escapeHtml(job.title)}</strong>
           <span class="choice-company">${escapeHtml(job.company)}<span class="choice-score" title="本地匹配分，满分 100">${escapeHtml(job.match_score ?? "—")}</span></span>
           <span class="choice-signals"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span class="${escapeHtml(strategyBadgeClass(job.strategy_fit))}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "待判断")}</span></span>
-          <span class="choice-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span>${escapeHtml(statusLabels[job.status] || job.status)}</span></span>
+          <span class="choice-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span>${job.has_applied && job.status !== "applied" ? "已投递 · " : ""}${escapeHtml(statusLabels[job.status] || job.status)}</span></span>
         </button>`).join("") : '<div class="empty-state">没有符合条件的职位。<button type="button" class="text-link" data-clear-search>清除筛选</button></div>';
       if (!visible.some(job => String(job.job_id) === String(selectedJobId))) selectJob(visible[0]?.job_id ?? null, false);
     }
@@ -1799,7 +1805,12 @@
         if (preview) preview.location.href = pdfUrl;
         else window.open(pdfUrl, "_blank", "noopener");
         await loadDashboard();
-        showSuccess(`岗位 #${jobId} 的简历草稿已生成。请检查 PDF；未经你批准，Agent 不会把它用于投递。`);
+        const generation = result.generation || {};
+        if (generation.engine === "local_fallback") {
+          showError(`已生成本地事实草稿，整份 AI 写作本次未完成。${generation.warning || "请检查 API 配置后重试。"} 请先审阅 PDF。`);
+        } else {
+          showSuccess(`岗位 #${jobId} 的简历草稿已生成。${generation.strategy || ""} 请检查 PDF 后再批准。`);
+        }
         return true;
       } catch (error) {
         if (preview) preview.close();
@@ -1869,7 +1880,7 @@
       elements.editorCity.value = person.city || "";
       elements.editorSummary.value = content.summary || "";
       elements.editorSelfEvaluation.value = content.self_evaluation || "";
-      elements.editorTemplate.value = content.template_id || "mono-photo";
+      elements.editorTemplate.value = content.template_id || "reference-a4";
       elements.editorSkills.value = (content.skills || []).join("、");
       const hasPhoto = Boolean(person.photo_path);
       elements.editorPhotoInclude.checked = hasPhoto;
@@ -1878,7 +1889,9 @@
         : "尚未上传照片；上传并勾选后，保存时嵌入新版面。";
       renderEditorSections();
       renderEditorEducation();
-      elements.resumeEditorStatus.textContent = "";
+      const generation = content.generation || {};
+      elements.resumeEditorStatus.textContent = [generation.strategy, generation.warning,
+        ...(generation.questions || []).map(question => `待补充：${question}`)].filter(Boolean).join(" ");
     }
 
     function renderEditorSections() {
@@ -1892,6 +1905,7 @@
                 <div class="field"><label>机构 / 项目</label><input value="${escapeHtml(entry.organization || "")}" maxlength="80" data-editor-field="organization"></div>
                 <div class="field"><label>角色</label><input value="${escapeHtml(entry.role || "")}" maxlength="80" data-editor-field="role"></div>
                 <div class="field"><label>时间</label><input value="${escapeHtml(entry.dates || "")}" maxlength="80" data-editor-field="dates"></div>
+                <div class="field full"><label>经历说明（如派遣关系）</label><input value="${escapeHtml(entry.context || "")}" maxlength="300" data-editor-field="context"></div>
               </div>
               ${(entry.bullets || []).map((bullet, bulletIndex) => `
                 <div class="editor-bullet" data-bullet-index="${bulletIndex}">
@@ -1956,6 +1970,7 @@
           if (organization) entry.organization = organization.value.trim();
           if (role) entry.role = role.value.trim();
           if (dates) entry.dates = dates.value.trim();
+          if (field("context")) entry.context = field("context").value.trim();
           [...entryEl.querySelectorAll(".editor-bullet")].forEach((bulletEl) => {
             const bulletIndex = Number(bulletEl.dataset.bulletIndex);
             const bullet = (entry.bullets || [])[bulletIndex];
@@ -2021,7 +2036,7 @@
           </article>`;
         }).join("");
       }
-      elements.copilotSuggestions.innerHTML = (selectedJobId ? ["为什么匹配？", "准备简历草稿", "面试该准备什么？"] : (snapshot?.suggestions || [])).map((suggestion) => `<button class="copilot-suggestion" type="button" data-copilot-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`).join("");
+      elements.copilotSuggestions.innerHTML = (selectedJobId ? ["分析我的简历，给我经历写作模板", "为什么匹配？", "准备简历草稿"] : (snapshot?.suggestions || [])).map((suggestion) => `<button class="copilot-suggestion" type="button" data-copilot-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`).join("");
       requestAnimationFrame(() => { elements.copilotMessages.scrollTop = elements.copilotMessages.scrollHeight; });
     }
 
@@ -2110,7 +2125,11 @@
           if (preview) preview.location.href = result.resume_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`;
           else window.open(result.resume_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`, "_blank", "noopener");
           await loadDashboard();
-          showSuccess(`岗位 #${jobId} 已由 Agent 直接生成新版简历（${result.change_count || 0} 处调整）。请核对 PDF；确认前不会进入可投递状态。`);
+          if (result.generation?.engine === "local_fallback") {
+            showError(`已生成本地事实草稿，整份 AI 写作本次未完成。${result.generation.warning || "请检查 API 配置。"}`);
+          } else {
+            showSuccess(`岗位 #${jobId} 已生成新版简历。${result.generation?.strategy || ""} 请核对 PDF 后再批准。`);
+          }
         } catch (error) {
           if (preview) preview.close();
           showError(`Agent 修改简历失败：${error?.message || error}`);
@@ -2649,6 +2668,7 @@
     elements.closeSettingsButton.addEventListener("click", closeSettingsDialog);
     elements.cancelSettingsButton.addEventListener("click", closeSettingsDialog);
     elements.aiProvider.addEventListener("change", () => {
+      if (elements.aiProvider.value === "codex") elements.aiModel.value = "codex-default";
       if (elements.aiProvider.value === "openai" && !elements.aiModel.value) {
         elements.aiModel.value = "gpt-5.6-luna";
       }

@@ -22,6 +22,18 @@ JD = "负责 SQL 数据分析与运营策略；要求本科，每周到岗四天
 
 
 class CopilotChatTests(unittest.TestCase):
+    def test_experience_templates_are_advice_without_resume_write_actions(self):
+        snapshot = respond_to_copilot(
+            "分析我的简历，给我经历写作模板，并优化写法",
+            thread_path=self.thread_path, repository=self.repository,
+            profile_path=self.profile_path, runtime_config_path=self.runtime_path,
+            usage_path=self.usage_path,
+        )
+        reply = snapshot.thread.messages[-1]
+        self.assertIn("非本人经历", reply.content)
+        self.assertIn("[本人实际任务]", reply.content)
+        self.assertFalse(any(action.kind in {"revise_resume", "create_resume_draft"} for action in reply.actions))
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
@@ -124,6 +136,10 @@ class CopilotChatTests(unittest.TestCase):
         self.assertNotIn("private@example.com", rendered)
         self.assertNotIn("123456", rendered)
         self.assertNotIn(str(self.root), rendered)
+        evidence = context["profile"]["resume_evidence"]
+        self.assertIn("fact-sql-analysis", json.dumps(evidence))
+        self.assertNotIn("fact-pending-tableau", json.dumps(evidence))
+        self.assertEqual(context["profile"]["pending_resume_facts"][0]["status"], "needs_confirmation")
         self.assertEqual(context["top_jobs"][0]["job_id"], self.job_id)
 
     def test_local_chat_persists_job_linked_safe_actions(self) -> None:

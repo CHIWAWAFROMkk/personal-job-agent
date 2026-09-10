@@ -44,6 +44,8 @@ class DashboardJobRow(StrictModel):
     match_score: int | None = None
     recommendation: str = ""
     status: str
+    has_applied: bool = False
+    applied_at: str | None = None
     source_url: str | None = None
     opportunity_track: Literal["daily_internship", "autumn_recruitment", "other"] = "other"
     role_tier: Literal["primary", "secondary", "stretch", "other"] = "other"

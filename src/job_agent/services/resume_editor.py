@@ -34,7 +34,7 @@ _MAX_PATH_CHARS = 260
 _MAX_SUMMARY_CHARS = 500
 _MAX_SKILL_CHARS = 30
 _MAX_SKILL_COUNT = 12
-_MAX_SECTIONS = 3
+_MAX_SECTIONS = 5
 _MAX_ENTRIES_PER_SECTION = 4
 _MAX_BULLETS_PER_ENTRY = 4
 _MAX_LABEL_CHARS = 16
@@ -173,6 +173,8 @@ def validate_resume_content(content: object) -> dict[str, object]:
                     entry.get(field), f"{entry_name}.{field}",
                     max_chars=_MAX_FIELD_CHARS, allow_empty=True,
                 )
+            if "context" in entry:
+                _require_str(entry["context"], f"{entry_name}.context", max_chars=300, allow_empty=True)
             bullets = entry.get("bullets")
             if not isinstance(bullets, list) or not bullets:
                 raise ResumeEditorError(f"{entry_name}.bullets 至少保留一条要点。")

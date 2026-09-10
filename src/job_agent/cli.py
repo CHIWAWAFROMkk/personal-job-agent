@@ -779,7 +779,7 @@ def _jobs_command(args: argparse.Namespace) -> int:
         ][: args.max_queries]
         for location, role in query_pairs:
             query = (
-                f"{location} {role} 实习 校招 应届 "
+                f"{location} {role} 实习 2027届 "
                 "(site:shixiseng.com OR site:nowcoder.com OR site:zhipin.com)"
             ).strip()
             try:

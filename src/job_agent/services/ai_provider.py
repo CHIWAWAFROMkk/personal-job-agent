@@ -16,6 +16,42 @@ class AIProviderError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class CodexJobMatchProvider:
+    model: str = "codex-default"
+    provider_id: str = "codex"
+
+    def match_job(self, profile: Profile, raw_jd: str, *, company: str | None = None,
+                  title: str | None = None, location: str | None = None,
+                  source: str = "manual", source_url: str | None = None) -> MatchResult:
+        import json
+        from job_agent.services.codex_bridge import CodexBridgeError, codex_completion
+        from job_agent.services.openai_matcher import (
+            AIJobAnalysis, OpenAIMatcherError, SYSTEM_PROMPT, _request_payload, _finalize_analysis, _json_from_model_text,
+        )
+        metadata = dict(company=company, title=title, location=location,
+                        source=source, source_url=source_url)
+        payload = _request_payload(profile, raw_jd, **metadata)
+        allowed_ids = [fact.id for experience in profile.experiences for fact in experience.facts
+                       if profile.is_application_ready(fact.status)]
+        payload["allowed_profile_fact_ids"] = allowed_ids
+        payload["output_json_schema"] = AIJobAnalysis.model_json_schema()
+        for definition in payload["output_json_schema"].get("$defs", {}).values():
+            field = definition.get("properties", {}).get("profile_fact_ids")
+            if field:
+                field["items"] = {"type": "string", "enum": allowed_ids}
+        try:
+            text, _, _ = codex_completion(SYSTEM_PROMPT + "\n仅返回符合 output_json_schema 的 JSON。"
+                "所有 profile_fact_ids 及 advantages 开头的编号只能从 allowed_profile_fact_ids 选择。"
+                "学历 ID、技能 ID 和来源 ID 都不是事实 ID；学历或技能有记录但无事实 ID 时，"
+                "可按记录分析并将该项 profile_fact_ids 留空，不得引用这些其他类型的 ID。",
+                                         json.dumps(payload, ensure_ascii=False), model=self.model)
+            analysis = AIJobAnalysis.model_validate_json(_json_from_model_text(text))
+            return _finalize_analysis(profile, analysis, raw_jd, engine=f"codex:{self.model}", **metadata)
+        except (CodexBridgeError, ValueError, OpenAIMatcherError) as exc:
+            raise AIProviderError("Codex 岗位分析未完成或输出不符合证据格式。") from exc
+
+
 class JobMatchProvider(Protocol):
     provider_id: str
     model: str
@@ -132,6 +168,8 @@ def build_job_match_provider(
     normalized = provider_id.casefold().strip()
     if normalized == "local":
         return LocalJobMatchProvider(model=model or "local-explainable-v1")
+    if normalized == "codex":
+        return CodexJobMatchProvider(model=model or "codex-default")
     if normalized == "openai":
         return OpenAIJobMatchProvider(model=model, api_key=api_key)
     if normalized in {"openai_compatible", "openai-compatible", "compatible"}:

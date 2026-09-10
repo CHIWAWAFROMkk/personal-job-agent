@@ -203,6 +203,11 @@ class DashboardTests(unittest.TestCase):
             },
         )
         self.assertEqual([item.job_id for item in snapshot.jobs_to_apply], [2])
+        job_rows = {item.job_id: item for item in snapshot.tracked_jobs}
+        self.assertTrue(job_rows[1].has_applied)
+        self.assertIsNotNone(job_rows[1].applied_at)
+        self.assertFalse(job_rows[2].has_applied)
+        self.assertIsNone(job_rows[2].applied_at)
         self.assertEqual(snapshot.priority_preparation[0].job_id, 1)
         self.assertEqual(snapshot.priority_preparation[0].priority, "elevated")
         self.assertEqual(snapshot.recent_feedback[0].status, "applied")
@@ -882,8 +887,15 @@ class DashboardTests(unittest.TestCase):
         thread.start()
         root = f"http://127.0.0.1:{server.server_port}"
 
-        def fake_invoke(config, user_payload):
+        def fake_invoke(config, user_payload, **kwargs):
             payload = json.loads(user_payload)
+            if "experiences" in payload:
+                experience = payload["experiences"][0]
+                fact = experience["facts"][0]
+                return (json.dumps({"summary": "数据分析与周度报告实践（贴合 JD）", "summary_fact_ids": [fact["id"]],
+                    "self_evaluation": "", "skill_ids": [payload["skills"][0]["id"]],
+                    "entries": [{"experience_id": experience["id"], "bullets": [{"label": "数据分析", "text": fact["statement"], "fact_ids": [fact["id"]]}]}],
+                    "strategy": "优先呈现数据分析证据", "questions": []}, ensure_ascii=False), 42, 24)
             resume = payload["resume"]
             skills = list(resume["skills"])[:11] + ["JD 对齐技能"]
             bullets = [
@@ -924,7 +936,7 @@ class DashboardTests(unittest.TestCase):
             # 无草稿岗位 → 404 之外的 400（ResumeEditorError）
             with mock.patch(
                 "job_agent.services.resume_polish._invoke_ai", side_effect=fake_invoke
-            ):
+            ), mock.patch("job_agent.services.resume_compose._invoke_ai", side_effect=fake_invoke):
                 with self.assertRaises(urllib.error.HTTPError) as raised:
                     post_json(
                         f"/api/jobs/{self.pending_job_id}/resume-content/polish",
@@ -985,7 +997,7 @@ class DashboardTests(unittest.TestCase):
             # 但仍保持 pending_user_review，不能直接进入投递材料。
             with mock.patch(
                 "job_agent.services.resume_polish._invoke_ai", side_effect=fake_invoke
-            ):
+            ), mock.patch("job_agent.services.resume_compose._invoke_ai", side_effect=fake_invoke):
                 revised = post_json(
                     f"/api/jobs/{self.pending_job_id}/resume-content/revise",
                     {

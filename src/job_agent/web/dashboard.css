@@ -361,6 +361,9 @@ dialog.copilot-dialog { position: fixed; inset: 0 0 0 auto; width: min(520px,100
 .job-choice:hover { background: rgba(255,255,255,.46); }
 .job-choice[aria-current="true"] { background: rgba(255,255,255,.78); border-color: rgba(255,255,255,.95); box-shadow: 0 4px 12px rgba(34,45,57,.065), inset 0 -1px 0 rgba(67,75,92,.08); }
 .job-choice[aria-current="true"] .choice-title { color: var(--ink); font-weight: 650; }
+.job-choice.is-applied { border-color: #438362; }
+.job-choice.is-applied[aria-current="true"] { border-color: #287346; box-shadow: 0 0 0 1px #287346; }
+.job-group-title { margin: 18px 12px 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .choice-company { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 12px; color: var(--ink-soft); }
 .choice-title { font-size: 15px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
 .choice-score { color: var(--ink-faint); font-variant-numeric: tabular-nums; }

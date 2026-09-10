@@ -17,7 +17,7 @@ def main():
             for name, width, height in [("desktop", 1440, 1000), ("mobile", 390, 844)]:
                 page = browser.new_page(viewport={"width": width, "height": height})
                 page.goto(f"http://127.0.0.1:{server.server_port}", wait_until="networkidle", timeout=15000)
-                page.evaluate("c => { resumeEditorState = {jobId:7,content:c,photoAvailable:false}; renderEditorForm(); elements.resumeEditorDialog.showModal(); }", _content("mono-photo"))
+                page.evaluate("c => { resumeEditorState = {jobId:7,content:c,photoAvailable:false}; renderEditorForm(); elements.resumeEditorDialog.showModal(); }", _content("reference-a4"))
                 expect(page.locator("#editorName")).to_be_visible()
                 checkbox = page.locator("#editorPhotoInclude").bounding_box()
                 assert checkbox["width"] == checkbox["height"] == 18, checkbox

@@ -226,8 +226,17 @@ def polish_resume_content_locally(
 def _invoke_ai(
     config: RuntimeConfig,
     user_payload: str,
+    *,
+    system_prompt: str = _SYSTEM_PROMPT,
+    max_output_tokens: int = 1600,
 ) -> tuple[str, int, int]:
     """按运行配置调用云端 AI；供测试 monkeypatch。"""
+    if config.ai.provider == "codex":
+        from job_agent.services.codex_bridge import CodexBridgeError, codex_completion
+        try:
+            return codex_completion(system_prompt, user_payload, model=config.ai.model)
+        except CodexBridgeError as exc:
+            raise CloudAIUnavailableError(str(exc)) from exc
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover - 环境缺依赖
@@ -239,14 +248,14 @@ def _invoke_ai(
         if config.ai.provider == "openai":
             if not config.ai.api_key:
                 raise CloudAIUnavailableError("OpenAI API Key 尚未配置。")
-            response = OpenAI(api_key=config.ai.api_key).responses.create(
+            response = OpenAI(api_key=config.ai.api_key, timeout=45, max_retries=0).responses.create(
                 model=config.ai.model,
                 store=False,
                 input=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_payload},
                 ],
-                max_output_tokens=1600,
+                max_output_tokens=max_output_tokens,
             )
             content = (getattr(response, "output_text", "") or "").strip()
         elif config.ai.provider == "openai_compatible":
@@ -255,13 +264,16 @@ def _invoke_ai(
             response = OpenAI(
                 api_key=config.ai.api_key or "local-api-no-key",
                 base_url=config.ai.base_url,
+                timeout=45,
+                max_retries=0,
             ).chat.completions.create(
                 model=config.ai.model,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_payload},
                 ],
                 temperature=0.3,
+                max_tokens=max_output_tokens,
             )
             content = (response.choices[0].message.content or "").strip()
         else:

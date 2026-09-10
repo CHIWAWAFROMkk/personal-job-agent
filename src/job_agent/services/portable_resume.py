@@ -143,44 +143,45 @@ def _selected_experiences(
 ) -> list[tuple[Experience, list[EvidenceFact]]]:
     grouped: dict[str, tuple[Experience, list[EvidenceFact]]] = {}
     ranked = _ranked_facts(profile, result)
-    if jd_text.strip():
-        jd_signal = jd_text.casefold()
-        concepts = (
+    # Certificates are rendered under skills, never as a job or a project.
+    ranked = [item for item in ranked if item[0].kind != ExperienceKind.OTHER] or ranked
+    jd_signal = jd_text.casefold()
+    concepts = (
             "excel", "vlookup", "数据透视表", "sql", "python", "数据", "统计",
             "分析", "清洗", "可视化", "报表", "日报", "周报", "运营", "业务",
-        )
+            "调研", "问卷", "报告", "研究", "招聘", "人才", "hr", "员工", "档案", "沟通", "活动",
+    )
 
-        def relevance(item: tuple[Experience, EvidenceFact]) -> int:
-            _, fact = item
-            fact_signal = " ".join(
-                [fact.statement, *fact.skills, *fact.tools]
-            ).casefold()
-            return sum(
-                1 for concept in concepts if concept in jd_signal and concept in fact_signal
-            )
+    def relevance(fact: EvidenceFact) -> int:
+        fact_signal = " ".join([fact.statement, *fact.skills, *fact.tools]).casefold()
+        return sum(1 for concept in concepts if concept in jd_signal and concept in fact_signal)
 
-        ranked = [
-            item
-            for _, item in sorted(
-                enumerate(ranked),
-                key=lambda pair: (-relevance(pair[1]), pair[0]),
-            )
-        ]
     for experience, fact in ranked:
-        item = grouped.setdefault(experience.id, (experience, []))
-        if len(item[1]) < 2:
-            item[1].append(fact)
-        if sum(len(facts) for _, facts in grouped.values()) >= 7:
-            break
+        grouped.setdefault(experience.id, (experience, []))[1].append(fact)
     values = list(grouped.values())
+    relevant = [item for item in values if any(relevance(fact) for fact in item[1])]
+    values = relevant or values
     values.sort(
         key=lambda item: (
             item[0].kind not in _WORK_KINDS,
-            -(len(item[1])),
-            item[0].id,
+            -max(relevance(fact) for fact in item[1]),
+            -sum(sorted((relevance(fact) for fact in item[1]), reverse=True)[:2]),
         )
     )
-    selected = values[:4]
+    selected = []
+    budget = 10
+    for experience, facts in values[:4]:
+        limit = min(4 if experience.kind in _WORK_KINDS else 2, budget)
+        ordered = sorted(facts, key=lambda fact: -relevance(fact))
+        picked = ordered[:limit]
+        outcomes = [fact for fact in ordered if fact.metrics or any(term in fact.statement for term in ("获得", "成绩", "认可"))]
+        # Preserve a real outcome beside the strongest action; unrelated awards do not win selection.
+        if len(picked) > 1 and outcomes and not any(fact in outcomes for fact in picked):
+            picked[-1] = outcomes[0]
+        selected.append((experience, picked))
+        budget -= len(picked)
+        if budget <= 0:
+            break
     if not selected or not any(facts for _, facts in selected):
         raise PortableResumeError("Profile 中没有可用于简历草稿的已确认事实。")
     return selected
@@ -269,9 +270,11 @@ def build_portable_resume_content(
     project_entries: list[dict[str, object]] = []
     for experience, facts in selected:
         entry = {
+            "experience_id": experience.id,
             "organization": experience.organization,
             "role": experience.role,
             "dates": _date_range(experience),
+            "context": experience.summary.split("。")[0] if "派遣" in experience.summary else "",
             "bullets": [
                 {
                     "label": _bullet_label(experience, fact),
@@ -298,7 +301,7 @@ def build_portable_resume_content(
     contact = profile.person.contact
     return {
         "schema_version": "1.0",
-        "template_id": "mono-photo",
+        "template_id": "reference-a4",
         "resume_version_id": (
             f"resume-{generated_at.strftime('%Y%m%dT%H%M%SZ')}-job-{job.job_id}-portable-v1"
         ),
@@ -321,6 +324,10 @@ def build_portable_resume_content(
         "summary": summary,
         "self_evaluation": suggest_self_evaluation({"skills": skills, "experience_sections": sections}),
         "skills": skills,
+        "availability": profile.job_search.availability.model_dump(mode="json"),
+        "highlights": [{"text": fact.statement, "fact_ids": [fact.id]}
+                       for experience in profile.experiences if experience.kind == ExperienceKind.OTHER
+                       for fact in experience.facts if profile.is_application_ready(fact.status)][:3],
         "experience_sections": sections,
         "education": education,
         "truthfulness": {
@@ -676,15 +683,39 @@ def _write_pdf_from_docx(docx_path: Path, pdf_path: Path) -> int | None:
 
     返回值为 PDF 页数；转换成功由调用方继续做单页硬校验。
     """
-    try:
-        from docx2pdf import convert
-        from pypdf import PdfReader
-    except ImportError:
+    import os
+    import subprocess
+    from pypdf import PdfReader
+    if os.name != "nt" or not shutil.which("pwsh"):
         return None
+    # Isolate COM conversion with a deadline; never close the user's other documents.
+    script = r'''
+$ErrorActionPreference = 'Stop'
+$app = $null; $doc = $null
+try {
+  try { $app = New-Object -ComObject KWPS.Application }
+  catch { $app = New-Object -ComObject Word.Application }
+  $alerts = $app.DisplayAlerts; $security = $app.AutomationSecurity
+  $app.DisplayAlerts = 0; $app.AutomationSecurity = 3
+  $doc = $app.Documents.Open($env:JOB_AGENT_EXPORT_DOCX, $false, $true, $false)
+  $doc.Repaginate()
+  $doc.ExportAsFixedFormat($env:JOB_AGENT_EXPORT_PDF, 17)
+} finally {
+  if ($null -ne $doc) { $doc.Close(0); [void][Runtime.InteropServices.Marshal]::ReleaseComObject($doc) }
+  if ($null -ne $app) {
+    $app.DisplayAlerts = $alerts; $app.AutomationSecurity = $security
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app)
+  }
+}
+'''
     try:
-        convert(str(docx_path), str(pdf_path))
+        subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script],
+                       env={**os.environ, "JOB_AGENT_EXPORT_DOCX": str(docx_path.resolve()), "JOB_AGENT_EXPORT_PDF": str(pdf_path.resolve())},
+                       # Leave room for one compact-layout retry and local rendering
+                       # within the dashboard client's 30-second request deadline.
+                       check=True, timeout=10, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
         return len(PdfReader(str(pdf_path)).pages)
-    except Exception:
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
@@ -721,21 +752,46 @@ def _render_resume_version(
             encoding="utf-8",
         )
         spec = _try_load_declarative_template(str(content.get("template_id") or ""))
+        pdf_engine = "local_renderer"
         if spec is not None:
             from job_agent.services.resume_render import render_docx
 
             render_docx(content, spec, docx_path, photo)
             pdf_pages = _write_pdf_from_docx(docx_path, pdf_path)
+            pdf_engine = "office_docx_conversion"
             if pdf_pages is None:
-                # 无 Word/LibreOffice 环境（如 CI）：回退 legacy 渲染兜底单页校验
-                pdf_pages = _write_pdf(content, pdf_path, photo)
+                pdf_engine = "local_renderer"
+                if spec["id"] == "reference-a4":
+                    from job_agent.services.resume_reference_layout import render_reference_pdf
+                    pdf_pages = render_reference_pdf(content, spec, pdf_path, photo)
+                else:
+                    pdf_pages = _write_pdf(content, pdf_path, photo)
         else:
             _write_docx(content, docx_path, photo)
             pdf_pages = _write_pdf(content, pdf_path, photo)
+        if pdf_pages != 1 and spec and spec["id"] == "reference-a4":
+            # One bounded spacing-only retry. Keep every fact and a readable 10.5 pt body.
+            content["layout_density"] = "compact"
+            render_docx(content, spec, docx_path, photo)
+            pdf_pages = _write_pdf_from_docx(docx_path, pdf_path)
+            pdf_engine = "office_docx_conversion"
+            if pdf_pages is None:
+                from job_agent.services.resume_reference_layout import render_reference_pdf
+                pdf_pages = render_reference_pdf(content, spec, pdf_path, photo)
+                pdf_engine = "local_renderer"
+            content_path.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if pdf_pages != 1:
             raise PortableResumeError(
                 f"简历草稿生成了 {pdf_pages} 页；为避免未经检查的分页，已拒绝标记为可审阅。"
             )
+        if spec and spec["id"] == "reference-a4":
+            from pypdf import PdfReader
+            from job_agent.services.resume_reference_layout import body_blocks
+            normalize = lambda text: re.sub(r"\s+|\u200b", "", str(text))
+            extracted = normalize("".join(page.extract_text() or "" for page in PdfReader(pdf_path).pages))
+            expected = [text for _, text, _ in body_blocks(content) if text]
+            if any(normalize(text) not in extracted for text in expected):
+                raise PortableResumeError("PDF文本完整性检查未通过，请检查字体或转换器后重新生成。")
         fact_ids = list(
             dict(content.get("truthfulness") or {}).get("confirmed_fact_ids", [])
         )
@@ -761,12 +817,17 @@ def _render_resume_version(
                 "star_bullets": star_bullets,
                 "embedded_photos": 1 if photo is not None else 0,
                 "photo_requirement": "embedded" if photo is not None else "not_required",
-                "docx_page_size": "140x204mm",
+                "docx_page_size": ("A4" if spec and spec["page"].get("size") == "A4" else "140x204mm"),
+                "pdf_engine": pdf_engine,
+                "docx_pdf_layout_equivalence": "office_converted" if pdf_engine == "office_docx_conversion" else "requires_visual_review",
                 "pdf_pages": pdf_pages,
+                "layout_density": content.get("layout_density", "standard"),
                 "docx_structural_review": "passed",
+                "pdf_text_integrity": "passed" if spec and spec["id"] == "reference-a4" else "not_checked",
                 "truthfulness_check": "passed",
                 "pdf_visual_review": "pending_user_review",
             },
+            "generation": content.get("generation", {"engine": "local_selection", "review_required": True}),
         }
         if extra_manifest:
             manifest.update(extra_manifest)

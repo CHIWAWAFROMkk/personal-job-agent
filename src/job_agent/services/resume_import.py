@@ -109,6 +109,12 @@ def _invoke_ai(
     user_payload: str,
 ) -> tuple[str, int, int]:
     """按运行配置调用云端 AI；供测试 monkeypatch。"""
+    if config.ai.provider == "codex":
+        from job_agent.services.codex_bridge import CodexBridgeError, codex_completion
+        try:
+            return codex_completion(_SYSTEM_PROMPT, user_payload, model=config.ai.model)
+        except CodexBridgeError as exc:
+            raise ResumeImportError(str(exc)) from exc
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover - 环境缺依赖

@@ -68,7 +68,7 @@ class ResumeEditorTests(unittest.TestCase):
         content, manifest_path = load_latest_resume_content(
             self.applications_dir, self.job.job_id
         )
-        self.assertEqual(content["template_id"], "mono-photo")
+        self.assertEqual(content["template_id"], "reference-a4")
         self.assertEqual(manifest_path, self.files.manifest)
 
     def test_load_rejects_job_without_draft(self) -> None:

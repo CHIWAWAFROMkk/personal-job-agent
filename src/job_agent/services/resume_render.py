@@ -257,6 +257,10 @@ def render_docx(
     content 为现有 portable 底稿 schema（person/target/summary/skills/
     experience_sections/education）。photo 仅在 spec.photo != "none" 时生效。
     """
+    if spec["id"] == "reference-a4":
+        from job_agent.services.resume_reference_layout import render_reference_docx
+        render_reference_docx(content, spec, path, photo)
+        return
     from docx import Document
     from docx.shared import Mm, Pt
 

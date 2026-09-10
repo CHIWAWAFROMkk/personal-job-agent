@@ -98,6 +98,7 @@ from job_agent.services.resume_polish import (
     polish_resume_content_locally,
     polish_resume_content_with_jd,
 )
+from job_agent.services.resume_compose import compose_resume_content_with_jd
 from job_agent.services.resume_import import (
     ResumeImportError,
     import_resume_text_into_draft,
@@ -491,6 +492,8 @@ def build_dashboard_snapshot(
             match_score=job.match_score,
             recommendation=job.recommendation or "",
             status=application.status if application else job.status,
+            has_applied=bool(application and application.applied_at),
+            applied_at=application.applied_at if application else None,
             source_url=source_url,
             opportunity_track=strategy.opportunity_track,
             role_tier=strategy.role_tier,
@@ -1560,6 +1563,7 @@ def create_dashboard_server(
                         "content": suggestion.content,
                         "changes": suggestion.changes,
                         "change_count": len(suggestion.changes),
+                        "generation": suggestion.content.get("generation", {}),
                         "engine": polish_engine,
                         "warning": warning,
                         "note": "润色仅为建议；请在编辑器中检查后保存，保存后仍需通过 PDF 版面人工审阅。",
@@ -1702,18 +1706,20 @@ def create_dashboard_server(
                     try:
                         if not quota_available:
                             raise ResumePolishError("AI 请求额度已用完。")
-                        suggestion = polish_resume_content_with_jd(
+                        suggestion = compose_resume_content_with_jd(
                             content,
                             job.jd_text,
+                            profile=load_profile(profile_path),
                             config=config,
                             user_instruction=instruction,
                         )
-                    except ResumePolishError:
+                    except ResumePolishError as exc:
                         suggestion = polish_resume_content_locally(
                             content,
                             job.jd_text,
                             user_instruction=instruction,
                         )
+                        suggestion.content["generation"] = {"engine": "local_fallback", "warning": str(exc), "review_required": True}
                     else:
                         record_api_usage(
                             api_usage_path,
@@ -1832,6 +1838,7 @@ def create_dashboard_server(
                             profile_path=profile_path,
                             runtime_config_path=runtime_config_path,
                             usage_path=api_usage_path,
+                            applications_dir=output_dir / "applications",
                         )
                 except (
                     UnicodeDecodeError,
@@ -1912,18 +1919,20 @@ def create_dashboard_server(
                     try:
                         if not quota_available:
                             raise ResumePolishError("AI 请求额度已用完。")
-                        suggestion = polish_resume_content_with_jd(
+                        suggestion = compose_resume_content_with_jd(
                             content,
                             job.jd_text,
+                            profile=profile,
                             config=config,
                             user_instruction="按 JD 直接生成岗位专属简历，使用 STAR 法则突出相关真实经历。",
                         )
-                    except ResumePolishError:
+                    except ResumePolishError as exc:
                         suggestion = polish_resume_content_locally(
                             content,
                             job.jd_text,
                             user_instruction="按 JD 生成岗位专属简历并按 STAR 组织真实经历。",
                         )
+                        suggestion.content["generation"] = {"engine": "local_fallback", "warning": str(exc), "review_required": True}
                     else:
                         record_api_usage(
                             api_usage_path,
@@ -1961,6 +1970,7 @@ def create_dashboard_server(
                         "ok": True,
                         "job_id": job_id,
                         "workspace": workspace.model_dump(mode="json"),
+                        "generation": suggestion.content.get("generation", {}),
                     }
                 )
                 return

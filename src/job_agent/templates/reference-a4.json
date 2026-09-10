@@ -1,0 +1,21 @@
+{
+  "id": "reference-a4",
+  "name": "经典版式 · 黑白 A4 单页",
+  "reference": "通用黑白 A4 简历：宋体正文、黑色分隔线、右上证件照。",
+  "layout": "single-column",
+  "photo": "top-right",
+  "photo_width_mm": 20.5,
+  "page": {"size": "A4", "margins_mm": {"top": 11.5, "bottom": 11.5, "left": 15, "right": 15}},
+  "fonts": {"eastAsia": "宋体", "latin": "Calibri"},
+  "palette": {"ink": "#000000", "body": "#000000", "muted": "#333333", "hairline": "#000000"},
+  "parts": {
+    "name": {"size_pt": 22, "bold": true},
+    "contact": {"size_pt": 10},
+    "target": {"size_pt": 11, "bold": true},
+    "summary": {"size_pt": 10.5},
+    "section_heading": {"size_pt": 12, "bold": true},
+    "entry_heading": {"size_pt": 10.5, "bold": true},
+    "bullet": {"size_pt": 10.5, "leading_pt": 14.5},
+    "education_item": {"size_pt": 10.5, "bold": true}
+  }
+}

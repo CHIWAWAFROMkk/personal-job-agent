@@ -23,6 +23,7 @@ class CopilotChatError(RuntimeError):
 
 
 _SUGGESTIONS = [
+    "分析我的简历，给我经历写作模板",
     "今天优先推进哪几个岗位？",
     "给最高匹配岗位准备简历草稿",
     "按 JD 直接润色最高匹配岗位的简历",
@@ -37,6 +38,7 @@ def _contextual_suggestions(context: dict[str, object]) -> list[str]:
     applied = int(pipeline.get("applied_or_later", 0))
     interviews = int(pipeline.get("interview_or_later", 0))
     suggestions: list[str] = []
+    suggestions.append("分析我的简历，给我经历写作模板")
     if interviews:
         suggestions.insert(0, "我下一场面试该准备什么？")
     if applied:
@@ -60,11 +62,18 @@ _SYSTEM_PROMPT = """
 规则：
 1. 先回答用户真正的问题，再给具体理由或下一步；中文自然、直接，不套固定话术，也不要机械重复岗位列表。
 2. 不得虚构岗位、投递状态、经历、技能、面试反馈、公司事实或执行结果。
+   resume_evidence 是已确认的脱敏经历库；pending_resume_facts 只能用于追问核实，绝不能当成已有能力或已完成成果。
 3. 不得在用户执行确认按钮前声称已经投递、发送、填写、上传、修改或联系任何人。用户要求改简历时，说明可通过对话下方的确认按钮直接生成新版，不要求用户进入表单逐项修改。
 4. 用户要求投递或代填时，明确说明 Agent 只打开岗位页面并准备岗位专用简历文件；登录、上传、作品集、表单与最终提交均由本人完成。
 5. 需要写入或打开网页的动作只能建议用户点击界面中的确认按钮，不得绕过确认节点。
 6. WORKSPACE_CONTEXT 不包含联系方式、API Key 或私有路径；不得索取或回显这些值。
 7. 信息不足时明确说“当前本地记录不足”，并指出应补充的真实证据。
+8. 用户要求简历分析或经历模板时，先结合完整已确认经历库和当前 JD 分析选材、职责与成果的缺口，再给具体写作帮助。
+   分成“基于真实素材的改写”和“待填写的写作模板”。真实改写应标明来源经历及 fact_id，不补造指标、工具、角色或结果。
+   示例可展示与岗位相关的写法，但必须明确标注“写作示例，非本人经历”，所有未知事实使用 [本人实际任务]、[实际工具]、[可核实结果] 等占位符。
+   不把假设的公司、数字或经历表述为使用者已有事实，不自动保存示例到画像或正式简历。给出 2 至 3 个有针对性的核实问题。
+9. 简历分析可以在未选择岗位时进行；有 JD 时围绕该岗位，没有时依据真实画像说明适用方向。
+10. current_resume_draft 是当前岗位最新草稿，可能包含用户手工编辑；用它诊断表达和选材，事实仍须回到 resume_evidence 核对。没有草稿时基于经历库分析，不声称看过一份不存在的简历。
 """.strip()
 
 
@@ -141,6 +150,13 @@ def _safe_profile_context(profile_path: Path) -> dict[str, object] | None:
         "confirmed_skill_count": sum(
             profile.is_application_ready(skill.status) for skill in profile.skills
         ),
+        "resume_evidence": {key: value for key, value in profile.application_context().items()
+                            if key in {"education", "experiences", "skills", "stories"}},
+        "pending_resume_facts": [
+            {"id": fact.id, "statement": fact.statement, "status": "needs_confirmation"}
+            for experience in profile.experiences for fact in experience.facts
+            if not profile.is_application_ready(fact.status)
+        ],
     }
 
 
@@ -269,6 +285,21 @@ def _local_reply(
     pipeline = dict(context.get("pipeline", {}))
     profile = context.get("profile")
     target_job = _job_from_message(message, context)
+
+    if any(term in normalized for term in ("分析简历", "分析我的简历", "经历模板", "写作模板", "写作示例", "经历怎么写")):
+        evidence = profile.get("resume_evidence", {}) if isinstance(profile, dict) else {}
+        experiences = evidence.get("experiences", [])
+        lines = ["先把每段经历拆成任务、个人行动和可核实的结果，再按岗位要求选材。"]
+        for experience in experiences[:2]:
+            facts = experience.get("facts", [])
+            if facts:
+                fact = facts[0]
+                lines.append(f"真实素材 · {experience.get('organization', '')}：{fact.get('statement', '')} [{fact.get('id', '')}]")
+        lines.extend([
+            "待填写的写作模板（写作示例，非本人经历）：针对 [业务问题]，我负责 [本人实际任务]，使用 [实际工具/方法] 完成 [具体行动]，形成 [可核实产出]，结果为 [真实指标及统计口径；没有数据则描述交付与验收]。",
+            "补充三个信息：你具体负责哪一步？交付物是什么？结果有什么记录可以验证？模板不会自动写入个人资料或正式简历。",
+        ])
+        return "\n\n".join(lines), [_action("open_profile", "补充真实经历")]
 
     resume_revision_intent = any(
         term in normalized
@@ -501,6 +532,10 @@ def _cloud_reply(
         {"workspace_context": context, "user_message": message},
         ensure_ascii=False,
     )
+    if config.ai.provider == "codex":
+        from job_agent.services.codex_bridge import codex_completion
+        return codex_completion(_SYSTEM_PROMPT, json.dumps({"history": history,
+            "current": json.loads(user_payload)}, ensure_ascii=False), model=config.ai.model)
     if config.ai.provider == "openai":
         if not config.ai.api_key:
             raise CopilotChatError("OpenAI API Key 尚未配置。")
@@ -582,6 +617,7 @@ def respond_to_copilot(
     runtime_config_path: Path,
     usage_path: Path,
     selected_job_id: int | None = None,
+    applications_dir: Path | None = None,
 ) -> CopilotSnapshot:
     cleaned = message.strip()
     if not cleaned:
@@ -599,6 +635,16 @@ def respond_to_copilot(
     context = build_safe_workspace_context(
         repository, profile_path=profile_path, selected_job_id=target_job_id
     )
+    if applications_dir is not None and target_job_id is not None:
+        from job_agent.services.resume_editor import ResumeEditorError, load_latest_resume_content
+        try:
+            draft, _ = load_latest_resume_content(applications_dir, target_job_id)
+        except ResumeEditorError:
+            pass
+        else:
+            context["current_resume_draft"] = {key: draft[key] for key in
+                ("summary", "self_evaluation", "skills", "experience_sections", "education", "highlights")
+                if key in draft}
     user_message = CopilotMessage(
         message_id=secrets.token_urlsafe(12),
         role="user",
