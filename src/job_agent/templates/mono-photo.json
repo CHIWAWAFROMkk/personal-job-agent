@@ -1,0 +1,39 @@
+{
+  "id": "mono-photo",
+  "name": "黑白直聘原版（带证件照）",
+  "reference": "用户提供的 DOCX 原件：微信图片_20260904032736_38_2.docx；SHA256 07D22E614D6FD6CA515603ADD92F1876693432CDC7DAEBF3AEC8BF12800148DB；版式参数由原文件实测",
+  "layout": "single-column",
+  "photo": "top-right",
+  "photo_columns_mm": [100.28, 29.19],
+  "photo_width_mm": 10.4,
+  "page": {
+    "size": "custom",
+    "width_mm": 140,
+    "height_mm": 204,
+    "margins_mm": { "top": 4.1, "bottom": 4.1, "left": 5.3, "right": 5.3 }
+  },
+  "fonts": {
+    "eastAsia": "SimHei",
+    "latin": "Arial"
+  },
+  "palette": {
+    "ink": "#111111",
+    "body": "#333333",
+    "muted": "#777777",
+    "hairline": "#111111",
+    "accent": "#111111"
+  },
+  "parts": {
+    "name": { "size_pt": 15, "bold": true, "color": "ink", "align": "left", "space_after_pt": 4 },
+    "contact": { "size_pt": 6.5, "color": "body", "separator": "    ", "space_after_pt": 4 },
+    "target": { "size_pt": 6.5, "color": "body", "format": "intention", "space_after_pt": 2 },
+    "summary": { "size_pt": 6.5, "color": "body", "layout": "bullet-section", "label": "个人优势", "leading": 1.35, "space_after_pt": 3, "indent_mm": 4 },
+    "skills_label": { "size_pt": 10, "bold": true, "color": "ink" },
+    "skills": { "enabled": false, "size_pt": 9.5, "color": "body", "separator": " · " },
+    "section_heading": { "size_pt": 9.5, "bold": true, "color": "ink", "space_before_pt": 9, "space_after_pt": 6, "rule": "hairline-below", "rule_color": "#000000", "rule_width_pt": 0.75 },
+    "entry_heading": { "size_pt": 7.5, "bold": true, "color": "ink", "dates_align": "right", "dates_color": "body", "dates_size_pt": 6.5, "space_before_pt": 4, "space_after_pt": 3 },
+    "entry_label": { "size_pt": 6.5, "bold": true, "color": "ink", "space_before_pt": 2, "space_after_pt": 1 },
+    "bullet": { "size_pt": 6.5, "color": "body", "list": "bullet", "leading": 1.35, "space_after_pt": 3, "indent_mm": 4 },
+    "education_item": { "size_pt": 7.5, "bold": true, "color": "ink", "dates_align": "right", "dates_color": "body", "dates_size_pt": 6.5, "space_after_pt": 3 }
+  }
+}

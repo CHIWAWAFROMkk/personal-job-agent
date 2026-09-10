@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-job-agent"
+version = "0.8.1"
+description = "A portable local-first job search agent for Windows"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12,<3.14"
+keywords = ["job-search", "resume", "local-first", "windows", "career"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "openai>=2.0",
+  "pydantic>=2.10,<3",
+  "python-docx>=1.1,<2",
+  "python-dotenv>=1.0,<2",
+  "pypdf>=6,<7",
+  "reportlab>=4,<5",
+  "lxml>=5,<7",
+  "playwright>=1.60,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+desktop = [
+  "pywebview>=6.1,<7",
+  "docx2pdf>=0.1.8,<1; sys_platform == 'win32'",
+]
+desktop-build = [
+  "pyinstaller>=6.15,<7",
+  "pillow>=11,<13",
+  "pywebview>=6.1,<7",
+]
+
+[project.scripts]
+job-agent = "job_agent.cli:main"
+job-agent-desktop = "job_agent.desktop:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+job_agent = [
+  "web/*.html",
+  "web/*.css",
+  "web/fonts/*.woff2",
+  "web/fonts/*.md",
+  "web/fonts/*.txt",
+  "templates/*.json",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

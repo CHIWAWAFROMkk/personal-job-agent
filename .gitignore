@@ -1,0 +1,51 @@
+# Python
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Builds and local QA output
+build/
+dist/
+work/
+*.spec
+
+# Secrets and local runtime state
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.pid
+*.key
+*.pem
+*.pfx
+*.p12
+
+# User-owned content: only empty sentinels are public
+data/private/*
+!data/private/.gitkeep
+data/inbox/*
+!data/inbox/.gitkeep
+data/output/*
+!data/output/.gitkeep
+
+# Browser sessions and local tools
+browser-profile/
+browser-data/
+playwright/.auth/
+.workbuddy/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+

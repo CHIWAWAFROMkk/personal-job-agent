@@ -1,0 +1,62 @@
+{
+  "id": "classic-centered",
+  "name": "经典中",
+  "reference": "Reactive Resume / kakuna（设计参数手工提炼，MIT）",
+  "layout": "single-column",
+  "photo": "none",
+  "page": {
+    "size": "A4",
+    "margins_mm": { "top": 14, "bottom": 14, "left": 16, "right": 16 }
+  },
+  "fonts": { "eastAsia": "Microsoft YaHei", "latin": "Georgia" },
+  "palette": {
+    "ink": "1D1D1F",
+    "body": "2B2B2E",
+    "muted": "6E6E73",
+    "hairline": "D2D2D7",
+    "accent": "1D1D1F"
+  },
+  "parts": {
+    "name": {
+      "size_pt": 17, "bold": true, "color": "ink", "align": "center",
+      "space_before_pt": 0, "space_after_pt": 3
+    },
+    "contact": {
+      "size_pt": 8, "bold": false, "color": "muted", "align": "center",
+      "separator": "  |  ", "space_before_pt": 0, "space_after_pt": 5
+    },
+    "header_rule": { "style": "hairline-below", "color": "hairline", "width_pt": 0.75, "space_after_pt": 7 },
+    "target": {
+      "size_pt": 9.5, "bold": true, "color": "ink", "align": "center",
+      "space_before_pt": 0, "space_after_pt": 5
+    },
+    "summary": {
+      "size_pt": 8.5, "bold": false, "color": "body", "align": "left",
+      "leading": 1.45, "space_after_pt": 6
+    },
+    "skills_label": {
+      "size_pt": 10, "bold": true, "color": "ink", "align": "left",
+      "space_before_pt": 5, "space_after_pt": 2, "rule": "hairline-below"
+    },
+    "skills": {
+      "size_pt": 8.5, "bold": false, "color": "body", "align": "left",
+      "separator": "  |  ", "space_after_pt": 4
+    },
+    "section_heading": {
+      "size_pt": 10, "bold": true, "color": "ink", "align": "left",
+      "space_before_pt": 8, "space_after_pt": 3, "rule": "hairline-below"
+    },
+    "entry_heading": {
+      "size_pt": 9, "bold": true, "color": "ink", "align": "left",
+      "separator": " · ", "space_before_pt": 3, "space_after_pt": 1
+    },
+    "bullet": {
+      "size_pt": 8.5, "bold": false, "color": "body", "align": "left",
+      "leading": 1.4, "space_after_pt": 1.5, "indent_mm": 4
+    },
+    "education_item": {
+      "size_pt": 8.5, "bold": false, "color": "body", "align": "left",
+      "separator": " · ", "space_after_pt": 2
+    }
+  }
+}

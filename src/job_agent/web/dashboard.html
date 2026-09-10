@@ -1,0 +1,2854 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="在本机管理岗位发现、匹配、投递材料、通勤与招聘进度。">
+  <title>个人求职 Agent</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+</head>
+<body>
+  <!-- Job-first workspace: one selected position, two guarded tasks, contextual Agent. -->
+  <a class="skip-link" href="#mainContent">跳到主要内容</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 19V11a7 7 0 0 1 14 0v8M5 14h14"/></svg></div>
+        <div>
+          <div class="brand-name">个人求职 Agent</div>
+        </div>
+      </div>
+      <nav class="workspace-nav" aria-label="主导航">
+        <button id="workspaceNav" class="nav-button active" aria-current="page" type="button">职位</button>
+        <button id="overviewNav" class="nav-button" type="button">进度与资料</button>
+      </nav>
+      <div class="top-actions">
+        <button id="openCopilotButton" class="top-button copilot-open" type="button" aria-expanded="true" aria-controls="copilotDialog"><svg class="agent-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11a7 7 0 0 1 14 0v8M5 14h14"/></svg>Agent</button>
+        <button id="openSettingsButton" class="top-button" type="button">
+          <span class="settings-summary">
+            <span id="connectorSummaryDot" class="settings-summary-dot"></span>
+            <span id="connectorSummaryText">连接与 API</span>
+          </span>
+        </button>
+        <div class="system-state" aria-live="polite">
+          <span id="stateDot" class="state-dot waiting"></span>
+          <span id="systemState">正在读取本地数据</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="mainContent" class="page">
+    <div id="alert" class="alert" role="alert"></div>
+
+    <section id="jobWorkspace" class="job-workspace" aria-label="职位工作台">
+      <aside class="job-navigator" aria-labelledby="jobsTitle">
+        <div class="navigator-head">
+          <div class="navigator-title"><h1 id="jobsTitle" tabindex="-1">职位</h1><span id="jobsCount">—</span>
+            <button id="refreshButton" class="icon-button" type="button" aria-label="刷新职位" title="刷新职位"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 8.2A7 7 0 0 1 18.5 6L20 11M4 13l1.5 5a7 7 0 0 0 12.4-2.2"/></svg></button>
+          </div>
+          <div class="track-switch" role="group" aria-label="求职通道">
+            <button type="button" data-job-track="daily_internship" aria-pressed="false"><span>实习机会</span><small id="internshipShare">—</small></button>
+            <button type="button" data-job-track="autumn_recruitment" aria-pressed="false"><span>校招机会</span><small id="autumnShare">—</small></button>
+          </div>
+          <div class="track-plan"><span id="trackPlan">正在计算今日侧重…</span><button type="button" data-job-track="all" aria-pressed="false">全部</button></div>
+          <label class="search-field"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="jobSearch" type="search" placeholder="搜索公司或职位" aria-label="搜索公司或职位"></label>
+          <div class="job-filters" aria-label="职位筛选">
+            <button type="button" data-job-filter="all" aria-pressed="true">全部</button>
+            <button type="button" data-job-filter="pending" aria-pressed="false">待投递</button>
+            <button type="button" data-job-filter="applied" aria-pressed="false">已投递</button>
+          </div>
+        </div>
+        <div id="jobs" class="job-list" aria-label="职位列表"><div class="empty-state">正在读取职位…</div></div>
+        <div class="navigator-foot"><span id="freshnessMain">本地数据</span><span id="freshnessSub" class="sr-only"></span><span>仅存本机</span></div>
+      </aside>
+      <section id="jobDetail" class="job-detail" aria-label="当前职位"><div class="empty-state">选择一个职位，开始准备。</div></section>
+    <aside id="copilotDialog" class="copilot-dialog" aria-labelledby="copilotDialogTitle">
+      <header class="copilot-head">
+        <div class="copilot-head-main">
+          <div>
+            <h2 id="copilotDialogTitle" class="copilot-title">Agent 对话</h2>
+            <p id="copilotScope" class="copilot-copy">请先选择职位</p>
+          </div>
+          <div class="copilot-head-actions">
+            <button id="historyCopilotButton" type="button">历史</button>
+            <button id="resetCopilotButton" type="button">新对话</button>
+            <button id="closeCopilotButton" type="button">关闭</button>
+          </div>
+        </div>
+        <div class="copilot-state">
+          <span id="copilotProvider">本地上下文</span>
+        </div>
+      </header>
+      <div id="copilotMessages" class="copilot-messages" aria-live="polite"></div>
+      <div id="copilotSuggestions" class="copilot-suggestions" aria-label="快捷问题"></div>
+      <form id="copilotForm" class="copilot-form">
+        <label class="sr-only" for="copilotInput">给求职 Agent 发送消息</label>
+        <div class="copilot-compose">
+          <textarea id="copilotInput" class="copilot-input" maxlength="4000" rows="2" placeholder="问这个职位，或描述简历修改要求…" required></textarea>
+          <button id="copilotSend" class="copilot-send" type="submit">发送</button>
+        </div>
+        <div class="copilot-footnote">
+          <span>Enter 发送 · Shift + Enter 换行</span>
+        </div>
+      </form>
+    </aside>
+    </section>
+    <section id="overviewPanel" class="overview-panel" hidden aria-label="进度与资料">
+      <div class="overview-head"><h1>进度与资料</h1><button id="queueButton" class="action-button secondary" type="button" disabled>查看待投递</button></div>
+
+    <div class="context-grid">
+      <section id="profileSummary" class="profile-strip" aria-label="当前个人资料">
+        <div class="profile-main">
+          <div class="profile-name">正在读取当前求职资料…</div>
+          <div class="profile-meta">简历、目标岗位和到岗条件将决定后续搜索与匹配。</div>
+        </div>
+        <button id="openProfileButton" class="action-button secondary" type="button">个人资料与简历</button>
+      </section>
+
+      <section id="preferenceSummary" class="preference-hub" aria-label="求职方向与通勤边界">
+        <div>
+          <div class="preference-label">求职方向</div>
+          <div id="preferenceRoles" class="preference-value">正在读取求职方向…</div>
+          <div id="preferenceScope" class="preference-note">目标行业、地点与排除条件将约束岗位发现。</div>
+        </div>
+        <div>
+          <div class="preference-label">通勤边界</div>
+          <div id="preferenceCommute" class="preference-value">正在读取通勤边界…</div>
+          <div class="preference-note">精确住址仅在你主动计算路线时发给地图服务。</div>
+        </div>
+        <button id="openPreferencesButton" class="action-button" type="button">修改方向与通勤</button>
+      </section>
+    </div>
+
+    <section id="metrics" class="metrics-grid" aria-label="核心求职指标">
+      <div class="metric-card"><div class="skeleton" style="width:55%"></div><div class="skeleton" style="width:38%;height:34px;margin-top:20px"></div></div>
+      <div class="metric-card"><div class="skeleton" style="width:55%"></div><div class="skeleton" style="width:38%;height:34px;margin-top:20px"></div></div>
+      <div class="metric-card"><div class="skeleton" style="width:55%"></div><div class="skeleton" style="width:38%;height:34px;margin-top:20px"></div></div>
+      <div class="metric-card"><div class="skeleton" style="width:55%"></div><div class="skeleton" style="width:38%;height:34px;margin-top:20px"></div></div>
+      <div class="metric-card"><div class="skeleton" style="width:55%"></div><div class="skeleton" style="width:38%;height:34px;margin-top:20px"></div></div>
+    </section>
+
+    <div class="layout-grid">
+      <section class="panel area-preparation" aria-labelledby="prepTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="prepTitle" class="panel-title">优先准备</h2>
+            <p class="panel-kicker">按优先级</p>
+          </div>
+          <span id="prepCount" class="panel-tag">—</span>
+        </div>
+        <div id="preparation" class="panel-body"><div class="skeleton" style="height:150px"></div></div>
+      </section>
+
+      <section class="panel area-feedback" aria-labelledby="feedbackTitle">
+        <div class="panel-head">
+          <div>
+            <h2 id="feedbackTitle" class="panel-title">最新反馈</h2>
+            <p class="panel-kicker">最近变化</p>
+          </div>
+        </div>
+        <div id="feedback" class="panel-body"><div class="skeleton" style="height:150px"></div></div>
+      </section>
+
+      <div class="insight-grid">
+        <section class="panel area-funnel" aria-labelledby="funnelTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="funnelTitle" class="panel-title">求职漏斗</h2>
+              <p class="panel-kicker">累计到达各阶段</p>
+            </div>
+            <span class="panel-tag">累计</span>
+          </div>
+          <div id="funnel" class="panel-body"><div class="skeleton" style="height:210px"></div></div>
+        </section>
+
+        <section class="panel area-candidate" aria-labelledby="candidateTitle">
+          <div class="panel-head">
+            <div>
+              <h2 id="candidateTitle" class="panel-title">候选质量</h2>
+              <p class="panel-kicker">去重后的核验分布</p>
+            </div>
+          </div>
+          <div id="candidateBreakdown" class="panel-body"><div class="skeleton" style="height:210px"></div></div>
+        </section>
+      </div>
+
+      <details class="utility-panel area-status">
+        <summary class="utility-summary">
+          <span><strong id="statusTitle">补录投递进度</strong><small>网站没有实时返回时，记录你确认的真实状态</small></span>
+          <span class="utility-action">展开</span>
+        </summary>
+        <div class="panel-body">
+          <form id="statusForm" class="status-form">
+            <div class="field">
+              <label for="statusJob">岗位</label>
+              <select id="statusJob" required><option value="">正在载入岗位…</option></select>
+            </div>
+            <div class="field">
+              <label for="statusValue">确认状态</label>
+              <select id="statusValue" required>
+                <option value="applied">已投递</option>
+                <option value="hr_read">HR 已读</option>
+                <option value="resume_requested">HR 索要简历</option>
+                <option value="screening">筛选中</option>
+                <option value="assessment">测评</option>
+                <option value="written_test">笔试</option>
+                <option value="interview_1">一面</option>
+                <option value="interview_2">二面</option>
+                <option value="final_interview">终面</option>
+                <option value="offer">Offer</option>
+                <option value="rejected">拒绝</option>
+                <option value="withdrawn">已撤回</option>
+                <option value="no_response">长期无反馈</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="statusDetail">备注（可选）</label>
+              <input id="statusDetail" maxlength="500" placeholder="例如：8 月 26 日在官网手动投递">
+            </div>
+            <button id="statusSubmit" class="action-button" type="submit">确认并记录</button>
+            <label class="checkbox-row status-confirm"><input id="statusConfirmed" type="checkbox" required>我已核对该岗位和当前进度，确认这是本人真实的投递状态。</label>
+          </form>
+        </div>
+      </details>
+
+      <details class="utility-panel area-commute">
+        <summary class="utility-summary">
+          <span><strong id="commuteTitle">计算通勤路线</strong><small>输入办公地址，让时间与距离参与岗位排序</small></span>
+          <span class="utility-action">展开</span>
+        </summary>
+        <div class="panel-body">
+          <form id="routeForm" class="route-grid">
+            <div class="field">
+              <label for="routeJob">岗位</label>
+              <select id="routeJob" required><option value="">正在载入岗位…</option></select>
+            </div>
+            <div class="field">
+              <label for="commuteDestination">办公地址 / 园区 / 地铁站</label>
+              <input id="commuteDestination" maxlength="200" placeholder="例如：上海市杨浦区创智天地" required>
+            </div>
+            <div class="field">
+              <label for="routeMode">交通方式</label>
+              <select id="routeMode" required>
+                <option value="transit">公交 / 地铁</option>
+                <option value="driving">驾车</option>
+                <option value="bicycling">骑行</option>
+                <option value="walking">步行</option>
+              </select>
+            </div>
+            <button id="routeSubmit" class="action-button" type="submit">计算并保存</button>
+            <label class="checkbox-row full"><input id="routeConfirmed" type="checkbox" required>我同意本次将常用出发地址和办公地址发送给已配置的高德地图 Web 服务；坐标不会保存在界面中。</label>
+          </form>
+          <div id="routeResult" class="route-result" aria-live="polite"></div>
+
+          <details class="manual-commute">
+            <summary>地图服务不可用？手动记录单程时间</summary>
+            <form id="commuteForm" class="commute-form">
+              <div class="field">
+                <label for="commuteJob">岗位</label>
+                <select id="commuteJob" required><option value="">正在载入岗位…</option></select>
+              </div>
+              <div class="field">
+                <label for="commuteMinutes">单程分钟</label>
+                <input id="commuteMinutes" type="number" min="0" max="600" step="1" placeholder="例如 45" required>
+              </div>
+              <div class="field">
+                <label for="commuteMethod">依据</label>
+                <select id="commuteMethod" required>
+                  <option value="user_estimate">本人估算</option>
+                  <option value="remote">远程 / 无需通勤</option>
+                  <option value="unknown">清除记录 / 待估算</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="commuteNote">备注（可选）</label>
+                <input id="commuteNote" maxlength="500" placeholder="例如：含换乘与步行约 45 分钟">
+              </div>
+              <button id="commuteSubmit" class="action-button" type="submit">保存手动记录</button>
+              <label class="checkbox-row commute-confirm"><input id="commuteConfirmed" type="checkbox" required>我确认这是本人可接受路线下的单程时间；0 分钟仅用于远程岗位。</label>
+            </form>
+          </details>
+        </div>
+      </details>
+
+      <details class="utility-panel full methodology-shell">
+        <summary class="utility-summary">
+          <span><strong id="methodTitle">数据口径与限制</strong><small>查看指标定义、统计范围和当前限制</small></span>
+          <span class="utility-action">展开</span>
+        </summary>
+        <div id="methodology" class="methodology"></div>
+      </details>
+    </div>
+
+    </section>
+
+    <dialog id="profileDialog" aria-labelledby="profileDialogTitle">
+      <div class="dialog-head">
+        <div>
+          <h2 id="profileDialogTitle" class="dialog-title">个人资料与简历</h2>
+          <p class="dialog-copy">上传真实简历并填写求职目标。系统只从原文提取，不会补写不存在的经历。</p>
+        </div>
+        <button id="closeProfileButton" class="dialog-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <form id="profileForm" class="profile-form" enctype="multipart/form-data">
+          <section class="form-section">
+            <h3 class="form-section-title">1. 当前是谁</h3>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="profileMode">资料使用方式</label>
+                <select id="profileMode" name="mode">
+                  <option value="update">更新当前用户（推荐）</option>
+                  <option value="replace">切换为一个新用户</option>
+                </select>
+                <div class="form-help">切换新用户会先备份当前资料和岗位库，再从空白岗位库重新搜索。</div>
+              </div>
+              <div class="field">
+                <label for="displayName">姓名或称呼</label>
+                <input id="displayName" name="display_name" maxlength="80" placeholder="例如：李明">
+              </div>
+              <div class="field">
+                <label for="stage">求职阶段</label>
+                <input id="stage" name="stage" maxlength="160" placeholder="例如：2027 届本科，寻找实习">
+              </div>
+              <div class="field">
+                <label for="profileEmail">邮箱（用于申请表）</label>
+                <input id="profileEmail" name="email" type="email" maxlength="160" autocomplete="email">
+              </div>
+              <div class="field">
+                <label for="profilePhone">电话（用于申请表）</label>
+                <input id="profilePhone" name="phone" maxlength="40" autocomplete="tel">
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">2. 上传真实简历</h3>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="resumeFile">简历文件</label>
+                <input id="resumeFile" name="resume" type="file" accept=".pdf,.docx,.txt,.md">
+                <div class="form-help">首次建档或切换新用户时必须上传；更新现有求职偏好时可以留空。支持 PDF、DOCX、TXT、MD，文件仅保存在本机。</div>
+              </div>
+              <div class="field full profile-photo-field">
+                <label for="profilePhotoFile">证件照（默认模板必需）</label>
+                <input id="profilePhotoFile" type="file" accept="image/jpeg,image/png">
+                <div id="profilePhotoStatus" class="form-help">上传 JPG 或 PNG（≤5MB）。照片只保存在本机，并放入岗位专属简历右上角。</div>
+                <div><button id="profilePhotoUpload" class="action-button compact secondary" type="button">上传或替换证件照</button></div>
+              </div>
+              <label class="checkbox-row full"><input id="confirmTruth" name="confirm_truth" value="true" type="checkbox">上传简历时，我确认其内容真实，并允许 Agent 在本机将其中的原文事实用于搜索、匹配和生成投递材料。</label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">3. 想找什么</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="targetRoles">目标岗位</label>
+                <input id="targetRoles" name="target_roles" placeholder="产品运营、数据运营、AI运营">
+              </div>
+              <div class="field">
+                <label for="adjacentRoles">可接受的相邻岗位</label>
+                <input id="adjacentRoles" name="adjacent_roles" placeholder="用户增长、商业化运营">
+              </div>
+              <div class="field">
+                <label for="targetIndustries">目标行业</label>
+                <input id="targetIndustries" name="target_industries" placeholder="互联网、AI、消费">
+              </div>
+              <div class="field">
+                <label for="preferredLocations">期望地点</label>
+                <input id="preferredLocations" name="preferred_locations" placeholder="上海、杭州">
+              </div>
+              <div class="field">
+                <label for="employmentTypes">求职类型</label>
+                <input id="employmentTypes" name="employment_types" value="实习" placeholder="实习、校招">
+              </div>
+              <div class="field">
+                <label for="mustHaves">必须满足</label>
+                <input id="mustHaves" name="must_haves" placeholder="例如：线下实习、可转正">
+              </div>
+              <div class="field full">
+                <label for="avoid">明确不考虑</label>
+                <input id="avoid" name="avoid" placeholder="例如：纯销售、异地、无薪实习">
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">4. 通勤边界</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="commuteOrigin">家庭住址、居住小区或常用地铁站</label>
+                <input id="commuteOrigin" name="commute_origin" maxlength="160" placeholder="例如：上海市浦东新区世纪大道站">
+                <div class="form-help">可填精确住址以提高路线准确度，也可只填小区或地铁站。内容保存在本机。</div>
+              </div>
+              <div class="field">
+                <label for="maxCommuteMinutes">可接受单程上限（分钟）</label>
+                <input id="maxCommuteMinutes" name="max_commute_minutes" type="number" min="5" max="240" step="1" placeholder="例如 60">
+              </div>
+              <div class="field full">
+                <label for="transportModes">常用通勤方式</label>
+                <input id="transportModes" name="transport_modes" placeholder="地铁、公交、步行、骑行">
+              </div>
+              <label class="checkbox-row full"><input id="remoteAcceptable" name="remote_acceptable" value="true" type="checkbox">可以接受远程或混合办公岗位。</label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">5. 时间与教育信息</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="earliestStart">最早开始日期</label>
+                <input id="earliestStart" name="earliest_start" type="date">
+              </div>
+              <div class="field">
+                <label for="daysPerWeek">每周保证到岗天数</label>
+                <input id="daysPerWeek" name="days_per_week" type="number" min="1" max="7">
+              </div>
+              <div class="field">
+                <label for="durationMonths">保证连续月数</label>
+                <input id="durationMonths" name="duration_months" type="number" min="1" max="60">
+              </div>
+              <div class="field">
+                <label for="graduation">预计毕业年月</label>
+                <input id="graduation" name="graduation" type="month">
+              </div>
+              <div class="field">
+                <label for="school">学校</label>
+                <input id="school" name="school" maxlength="160">
+              </div>
+              <div class="field">
+                <label for="degree">学历</label>
+                <input id="degree" name="degree" maxlength="80" placeholder="本科、硕士">
+              </div>
+              <div class="field full">
+                <label for="major">专业</label>
+                <input id="major" name="major" maxlength="120">
+              </div>
+              <div class="field full">
+                <label for="profileNotes">其他偏好</label>
+                <textarea id="profileNotes" name="notes" maxlength="600" placeholder="例如：优先大厂、愿意尝试自己没想到但匹配的岗位"></textarea>
+              </div>
+              <div id="replaceConfirm" class="replace-confirm">
+                <label class="checkbox-row"><input name="confirm_replace" value="true" type="checkbox">我确认切换为新用户；系统会备份当前 Profile 和岗位数据库，然后清空当前岗位列表重新开始。</label>
+              </div>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button id="cancelProfileButton" class="action-button ghost" type="button">取消</button>
+            <button id="profileSubmit" class="action-button secondary" type="submit">保存资料</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+    <dialog id="preferencesDialog" class="preference-dialog" aria-labelledby="preferencesDialogTitle">
+      <div class="dialog-head">
+        <div>
+          <h2 id="preferencesDialogTitle" class="dialog-title">求职方向与通勤边界</h2>
+          <p class="dialog-copy">这些条件直接决定搜索关键词、岗位排序和通勤排除。修改后立即作用于当前用户。</p>
+        </div>
+        <button id="closePreferencesButton" class="dialog-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <form id="preferencesForm" class="profile-form">
+          <section class="form-section">
+            <h3 class="form-section-title">求职目标</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="preferenceTargetRoles">核心目标岗位</label>
+                <input id="preferenceTargetRoles" required placeholder="AI 产品运营、数据运营、增长运营">
+              </div>
+              <div class="field">
+                <label for="preferenceAdjacentRoles">可探索的相邻岗位</label>
+                <input id="preferenceAdjacentRoles" placeholder="产品助理、商业分析、用户研究">
+              </div>
+              <div class="field">
+                <label for="preferenceIndustries">目标行业</label>
+                <input id="preferenceIndustries" placeholder="AI、互联网、消费科技">
+              </div>
+              <div class="field">
+                <label for="preferenceLocations">工作城市 / 区域</label>
+                <input id="preferenceLocations" required placeholder="上海、杭州">
+              </div>
+              <div class="field">
+                <label for="preferenceEmploymentTypes">求职类型</label>
+                <input id="preferenceEmploymentTypes" placeholder="实习、校招">
+              </div>
+              <div class="field">
+                <label for="preferenceMustHaves">必须满足</label>
+                <input id="preferenceMustHaves" placeholder="可连续实习三个月、线下">
+              </div>
+              <div class="field full">
+                <label for="preferenceAvoid">明确不考虑</label>
+                <input id="preferenceAvoid" placeholder="纯销售、异地、无薪实习">
+              </div>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">住址与通勤</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="preferenceCommuteOrigin">家庭住址 / 小区 / 常用地铁站</label>
+                <input id="preferenceCommuteOrigin" maxlength="160" placeholder="上海市浦东新区世纪大道站">
+                <div class="form-help">精确度由你决定。只存本机；只有主动计算路线时才会发送给地图服务。</div>
+              </div>
+              <div class="field">
+                <label for="preferenceMaxCommute">可接受单程上限（分钟）</label>
+                <input id="preferenceMaxCommute" type="number" min="5" max="240" step="1" placeholder="60">
+              </div>
+              <div class="field full">
+                <label for="preferenceTransportModes">常用交通方式</label>
+                <input id="preferenceTransportModes" placeholder="地铁、公交、步行、骑行">
+              </div>
+              <label class="checkbox-row full"><input id="preferenceRemote" type="checkbox">接受远程或混合办公。</label>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">投入边界</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="preferenceDailyPayFloor">日常实习日薪底线（元）</label>
+                <input id="preferenceDailyPayFloor" type="number" min="0" max="5000" step="1" placeholder="180">
+                <div class="form-help">低于底线不会偷偷删除；会标成“人工破例”，由你判断公司和相关性是否值得。</div>
+              </div>
+              <label class="checkbox-row"><input id="preferenceExcludeOutsourcing" type="checkbox">拦截外包、派遣与派驻岗位。</label>
+            </div>
+          </section>
+          <div class="form-actions">
+            <button id="cancelPreferencesButton" class="action-button ghost" type="button">取消</button>
+            <button id="preferencesSubmit" class="action-button" type="submit">保存并重新排序</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+    <dialog id="resumeEditorDialog" class="preference-dialog resume-editor-dialog" aria-labelledby="resumeEditorDialogTitle">
+      <div class="dialog-head">
+        <div>
+          <h2 id="resumeEditorDialogTitle" class="dialog-title">编辑简历</h2>
+          <p class="dialog-copy">保存生成新 PDF，审阅后才能用于申请。也可在 Agent 中描述修改要求。</p>
+        </div>
+        <button id="resumeEditorCloseButton" class="dialog-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <form id="resumeEditorForm" class="profile-form">
+          <section class="form-section">
+            <h3 class="form-section-title">基本信息</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="editorName">姓名</label>
+                <input id="editorName" maxlength="30" required>
+              </div>
+              <div class="field">
+                <label for="editorPhone">电话</label>
+                <input id="editorPhone" maxlength="60">
+              </div>
+              <div class="field">
+                <label for="editorEmail">邮箱</label>
+                <input id="editorEmail" maxlength="60">
+              </div>
+              <div class="field">
+                <label for="editorCity">城市</label>
+                <input id="editorCity" maxlength="60">
+              </div>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">证件照</h3>
+            <div class="form-grid">
+              <div class="field editor-photo-file">
+                <label for="editorPhotoFile">照片文件（JPG / PNG，≤5MB）</label>
+                <input id="editorPhotoFile" type="file" accept="image/jpeg,image/png">
+                <div class="form-help" id="editorPhotoStatus">尚未上传照片；当前版面不含照片。</div>
+              </div>
+              <div class="field">
+                <div class="editor-photo-actions">
+                  <button id="editorPhotoUpload" class="action-button compact secondary" type="button">上传照片</button>
+                  <label class="checkbox-row"><input id="editorPhotoInclude" type="checkbox">在简历右上角嵌入照片</label>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">简历模板</h3>
+            <div class="field full">
+              <select id="editorTemplate">
+                <option value="mono-photo">黑白直聘风 · 编号列表带头照位（默认）</option>
+                <option value="portable-evidence-resume-v1">便携证据版 · 经典（旧版式）</option>
+                <option value="minimal-mono">极简墨 · 黑白极简单栏</option>
+                <option value="classic-centered">经典中 · 居中标题单栏</option>
+                <option value="modern-photo">现代蓝 · 带头照片位单栏</option>
+              </select>
+              <div class="form-help">切换模板后点“保存并重新渲染”生效；DOCX 与 PDF 会按新模板重新生成，PDF 仍需人工审阅。</div>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">个人摘要</h3>
+            <div class="field full">
+              <textarea id="editorSummary" rows="3" maxlength="500"></textarea>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">核心能力（顿号分隔）</h3>
+            <div class="field full">
+              <input id="editorSkills" maxlength="400" placeholder="Excel、数据分析、Python、AI 工具">
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">经历要点（STAR 结构，可直接改写）</h3>
+            <div id="editorSections"></div>
+            <button id="editorAddEntry" class="action-button compact secondary" type="button">添加一段经历</button>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">教育经历</h3>
+            <div id="editorEducation"></div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">自我评价</h3>
+            <div class="field full">
+              <label for="editorSelfEvaluation">结合岗位的能力与工作方式</label>
+              <textarea id="editorSelfEvaluation" rows="3" maxlength="300" placeholder="填写自我评价，可点击“按 JD 润色”优化；留空则不显示。"></textarea>
+            </div>
+          </section>
+          <section class="form-section">
+            <h3 class="form-section-title">从原简历导入（AI 解析，可选）</h3>
+            <div class="field full">
+              <textarea id="editorImportText" rows="4" maxlength="8000" placeholder="把你的原简历文本整段粘贴到这里，再点击下方按钮；AI 会解析成表单内容，解析后请逐项检查再保存。"></textarea>
+            </div>
+            <button id="editorImport" class="action-button compact secondary" type="button">从原简历导入（AI 解析）</button>
+          </section>
+          <div class="form-actions">
+            <button id="resumeEditorCancel" class="action-button ghost" type="button">取消</button>
+            <button id="editorPolish" class="action-button secondary" type="button">按 JD 润色</button>
+            <button id="resumeEditorSubmit" class="action-button" type="submit">保存并生成 PDF</button>
+          </div>
+          <div class="form-help" id="resumeEditorStatus"></div>
+        </form>
+      </div>
+    </dialog>
+
+
+
+    <dialog id="settingsDialog" aria-labelledby="settingsDialogTitle">
+      <div class="dialog-head">
+        <div>
+          <h2 id="settingsDialogTitle" class="dialog-title">连接与 API</h2>
+          <p class="dialog-copy">每位使用者都可以连接自己的服务。密钥只写入本机私有目录，页面和接口都不会再次显示原文。</p>
+        </div>
+        <button id="closeSettingsButton" class="dialog-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <form id="settingsForm" class="profile-form">
+          <div class="connector-grid">
+            <section class="connector-card">
+              <h3>AI 分析</h3>
+              <p>用于更细致地拆解 JD 和解释匹配。即使不连接云端 AI，本地规则评分也可以独立运行。</p>
+              <div class="connector-status">
+                <div><strong id="aiStatusTitle">正在读取</strong><div id="aiStatusDetail">检查本地配置…</div></div>
+                <span id="aiStatusDot" class="connector-dot"></span>
+              </div>
+              <div class="field">
+                <label for="aiProvider">服务类型</label>
+                <select id="aiProvider" required>
+                  <option value="local">本地规则 · 免费且无需密钥</option>
+                  <option value="openai">OpenAI API</option>
+                  <option value="openai_compatible">OpenAI 兼容 API · DeepSeek / 通义 / Kimi / 本地模型等</option>
+                </select>
+              </div>
+              <div id="aiModelField" class="field conditional-field">
+                <label for="aiModel">模型名称</label>
+                <input id="aiModel" maxlength="160" placeholder="例如 gpt-5.6-luna 或 deepseek-chat">
+              </div>
+              <div id="aiBaseUrlField" class="field conditional-field" hidden>
+                <label for="aiBaseUrl">兼容 API 地址</label>
+                <input id="aiBaseUrl" type="url" maxlength="500" placeholder="https://api.example.com/v1">
+                <div class="form-help">云端地址必须使用 HTTPS；Ollama 等本机服务可以使用 http://127.0.0.1。服务端需支持 Chat Completions 与 JSON mode；不支持时会明确报错，不会静默改用别的服务。</div>
+              </div>
+              <div id="aiKeyField" class="field conditional-field" hidden>
+                <label for="aiApiKey">API Key</label>
+                <input id="aiApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留当前密钥">
+                <div class="form-help">选择 OpenAI 时只能使用 OpenAI Platform 创建的密钥；博查密钥只用于岗位搜索。DeepSeek、通义、Kimi 等请选“OpenAI 兼容 API”，并填写对应地址与模型。</div>
+              </div>
+              <label id="clearAiKeyRow" class="checkbox-row conditional-field" hidden><input id="clearAiApiKey" type="checkbox">删除本机已保存的 AI 密钥</label>
+              <div class="field">
+                <label for="aiMonthlyQuota">本机月度调用上限（可选）</label>
+                <input id="aiMonthlyQuota" type="number" min="1" max="10000000" step="1" placeholder="留空则只显示已用量">
+              </div>
+              <div id="aiUsageLine" class="usage-line">本月本机调用记录：—</div>
+              <a id="aiKeysLink" class="text-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" hidden>创建或更换 OpenAI API Key</a>
+              <a id="aiBalanceLink" class="text-link" href="https://platform.openai.com/usage" target="_blank" rel="noopener noreferrer" hidden>查看 OpenAI 官方用量与费用</a>
+            </section>
+
+            <section class="connector-card">
+              <h3>岗位搜索</h3>
+              <p>搜索和 AI 分析相互独立。关闭搜索后仍可手动导入 JD、评分、生成材料和记录进度。</p>
+              <div class="connector-status">
+                <div><strong id="searchStatusTitle">正在读取</strong><div id="searchStatusDetail">检查本地配置…</div></div>
+                <span id="searchStatusDot" class="connector-dot"></span>
+              </div>
+              <div class="field">
+                <label for="searchProvider">搜索服务</label>
+                <select id="searchProvider" required>
+                  <option value="none">不连接搜索 API · 手动导入</option>
+                  <option value="bocha">博查 Search</option>
+                  <option value="brave">Brave Search</option>
+                </select>
+              </div>
+              <div id="searchKeyField" class="field conditional-field" hidden>
+                <label for="searchApiKey">搜索 API Key</label>
+                <input id="searchApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留当前密钥">
+              </div>
+              <label id="clearSearchKeyRow" class="checkbox-row conditional-field" hidden><input id="clearSearchApiKey" type="checkbox">删除本机已保存的搜索密钥</label>
+              <div class="field">
+                <label for="searchMonthlyQuota">本机月度调用上限（可选）</label>
+                <input id="searchMonthlyQuota" type="number" min="1" max="10000000" step="1" placeholder="例如购买 20 次则填 20">
+              </div>
+              <div id="searchUsageLine" class="usage-line">本月本机调用记录：—</div>
+              <a id="searchBalanceLink" class="text-link" href="https://open.bochaai.com/overview" target="_blank" rel="noopener noreferrer" hidden>查看博查真实余额与资源包</a>
+              <p class="secret-note">搜索会消耗对应服务的调用额度；只有你主动开始岗位发现时才会请求搜索 API。</p>
+            </section>
+
+            <section class="connector-card">
+              <h3>通勤路线</h3>
+              <p>把出发地址和办公地址解析为路线、时间与距离。未配置时仍可手动记录通勤分钟。</p>
+              <div class="connector-status">
+                <div><strong id="mapStatusTitle">正在读取</strong><div id="mapStatusDetail">检查本地配置…</div></div>
+                <span id="mapStatusDot" class="connector-dot"></span>
+              </div>
+              <div class="field">
+                <label for="mapProvider">地图服务</label>
+                <select id="mapProvider" required>
+                  <option value="none">不连接地图 · 手动估算</option>
+                  <option value="amap">高德地图 Web 服务</option>
+                </select>
+              </div>
+              <div id="mapKeyField" class="field conditional-field" hidden>
+                <label for="mapApiKey">高德 Web 服务 Key</label>
+                <input id="mapApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留当前密钥">
+                <div class="form-help"><a class="text-link" href="https://lbs.amap.com/api/webservice/create-project-and-key" target="_blank" rel="noopener noreferrer">前往高德官方创建 Web 服务 Key</a></div>
+              </div>
+              <label id="clearMapKeyRow" class="checkbox-row conditional-field" hidden><input id="clearMapApiKey" type="checkbox">删除本机已保存的地图密钥</label>
+              <div class="field">
+                <label for="mapMonthlyQuota">本机月度请求上限（可选）</label>
+                <input id="mapMonthlyQuota" type="number" min="1" max="10000000" step="1" placeholder="留空则只显示已用量">
+              </div>
+              <div id="mapUsageLine" class="usage-line">本月本机调用记录：—</div>
+              <p class="secret-note">每次路线计算通常包含两次地址解析和一次路线请求。只有主动点击“计算并保存”时才会发送地址。</p>
+            </section>
+          </div>
+
+          <p class="secret-note">额度说明：软件显示的是本机从本版本起记录的成功请求；服务商账户真实余额仍以其官方控制台为准。填写本机月度上限后，可看到可控剩余量。密钥保存在私有目录且不会通过页面接口回显。</p>
+          <div class="form-actions">
+            <button id="cancelSettingsButton" class="action-button ghost" type="button">取消</button>
+            <button id="settingsSubmit" class="action-button" type="submit">保存并使用</button>
+          </div>
+        </form>
+      </div>
+    </dialog>
+
+
+  </main>
+
+  <script>
+    "use strict";
+
+    const elements = {
+      alert: document.getElementById("alert"),
+      profileSummary: document.getElementById("profileSummary"),
+      preferenceRoles: document.getElementById("preferenceRoles"),
+      preferenceScope: document.getElementById("preferenceScope"),
+      preferenceCommute: document.getElementById("preferenceCommute"),
+      openPreferencesButton: document.getElementById("openPreferencesButton"),
+      preferencesDialog: document.getElementById("preferencesDialog"),
+      closePreferencesButton: document.getElementById("closePreferencesButton"),
+      cancelPreferencesButton: document.getElementById("cancelPreferencesButton"),
+      preferencesForm: document.getElementById("preferencesForm"),
+      preferencesSubmit: document.getElementById("preferencesSubmit"),
+      preferenceTargetRoles: document.getElementById("preferenceTargetRoles"),
+      preferenceAdjacentRoles: document.getElementById("preferenceAdjacentRoles"),
+      preferenceIndustries: document.getElementById("preferenceIndustries"),
+      preferenceLocations: document.getElementById("preferenceLocations"),
+      preferenceEmploymentTypes: document.getElementById("preferenceEmploymentTypes"),
+      preferenceMustHaves: document.getElementById("preferenceMustHaves"),
+      preferenceAvoid: document.getElementById("preferenceAvoid"),
+      preferenceCommuteOrigin: document.getElementById("preferenceCommuteOrigin"),
+      preferenceMaxCommute: document.getElementById("preferenceMaxCommute"),
+      preferenceTransportModes: document.getElementById("preferenceTransportModes"),
+      preferenceRemote: document.getElementById("preferenceRemote"),
+      preferenceDailyPayFloor: document.getElementById("preferenceDailyPayFloor"),
+      preferenceExcludeOutsourcing: document.getElementById("preferenceExcludeOutsourcing"),
+      openProfileButton: document.getElementById("openProfileButton"),
+      profileDialog: document.getElementById("profileDialog"),
+      closeProfileButton: document.getElementById("closeProfileButton"),
+      cancelProfileButton: document.getElementById("cancelProfileButton"),
+      profileForm: document.getElementById("profileForm"),
+      profileMode: document.getElementById("profileMode"),
+      resumeFile: document.getElementById("resumeFile"),
+      profilePhotoFile: document.getElementById("profilePhotoFile"),
+      profilePhotoUpload: document.getElementById("profilePhotoUpload"),
+      profilePhotoStatus: document.getElementById("profilePhotoStatus"),
+      confirmTruth: document.getElementById("confirmTruth"),
+      replaceConfirm: document.getElementById("replaceConfirm"),
+      profileSubmit: document.getElementById("profileSubmit"),
+      metrics: document.getElementById("metrics"),
+      missionPending: document.getElementById("missionPending"),
+      missionCandidates: document.getElementById("missionCandidates"),
+      missionRecommended: document.getElementById("missionRecommended"),
+      missionConfirm: document.getElementById("missionConfirm"),
+      missionApplied: document.getElementById("missionApplied"),
+      missionFeedback: document.getElementById("missionFeedback"),
+      funnel: document.getElementById("funnel"),
+      jobs: document.getElementById("jobs"),
+      jobsCount: document.getElementById("jobsCount"),
+      candidateBreakdown: document.getElementById("candidateBreakdown"),
+      preparation: document.getElementById("preparation"),
+      prepCount: document.getElementById("prepCount"),
+      feedback: document.getElementById("feedback"),
+      statusForm: document.getElementById("statusForm"),
+      statusJob: document.getElementById("statusJob"),
+      statusValue: document.getElementById("statusValue"),
+      statusDetail: document.getElementById("statusDetail"),
+      statusConfirmed: document.getElementById("statusConfirmed"),
+      statusSubmit: document.getElementById("statusSubmit"),
+      commuteForm: document.getElementById("commuteForm"),
+      commuteJob: document.getElementById("commuteJob"),
+      commuteMinutes: document.getElementById("commuteMinutes"),
+      commuteMethod: document.getElementById("commuteMethod"),
+      commuteNote: document.getElementById("commuteNote"),
+      commuteConfirmed: document.getElementById("commuteConfirmed"),
+      commuteSubmit: document.getElementById("commuteSubmit"),
+      routeForm: document.getElementById("routeForm"),
+      routeJob: document.getElementById("routeJob"),
+      commuteDestination: document.getElementById("commuteDestination"),
+      routeMode: document.getElementById("routeMode"),
+      routeConfirmed: document.getElementById("routeConfirmed"),
+      routeSubmit: document.getElementById("routeSubmit"),
+      routeResult: document.getElementById("routeResult"),
+      methodology: document.getElementById("methodology"),
+      queueButton: document.getElementById("queueButton"),
+      refreshButton: document.getElementById("refreshButton"),
+      jobsTitle: document.getElementById("jobsTitle"),
+      freshnessMain: document.getElementById("freshnessMain"),
+      freshnessSub: document.getElementById("freshnessSub"),
+      systemState: document.getElementById("systemState"),
+      stateDot: document.getElementById("stateDot"),
+      openCopilotButton: document.getElementById("openCopilotButton"),
+      resumeEditorDialog: document.getElementById("resumeEditorDialog"),
+      resumeEditorCloseButton: document.getElementById("resumeEditorCloseButton"),
+      resumeEditorCancel: document.getElementById("resumeEditorCancel"),
+      resumeEditorForm: document.getElementById("resumeEditorForm"),
+      resumeEditorSubmit: document.getElementById("resumeEditorSubmit"),
+      resumeEditorStatus: document.getElementById("resumeEditorStatus"),
+      editorImportText: document.getElementById("editorImportText"),
+      editorImport: document.getElementById("editorImport"),
+      editorName: document.getElementById("editorName"),
+      editorTemplate: document.getElementById("editorTemplate"),      editorPhone: document.getElementById("editorPhone"),
+      editorEmail: document.getElementById("editorEmail"),
+      editorCity: document.getElementById("editorCity"),
+      editorPhotoFile: document.getElementById("editorPhotoFile"),
+      editorPhotoUpload: document.getElementById("editorPhotoUpload"),
+      editorPhotoStatus: document.getElementById("editorPhotoStatus"),
+      editorPhotoInclude: document.getElementById("editorPhotoInclude"),
+      editorSummary: document.getElementById("editorSummary"),
+      editorSelfEvaluation: document.getElementById("editorSelfEvaluation"),
+      editorSkills: document.getElementById("editorSkills"),
+      editorSections: document.getElementById("editorSections"),
+      editorAddEntry: document.getElementById("editorAddEntry"),
+      editorPolish: document.getElementById("editorPolish"),
+      editorEducation: document.getElementById("editorEducation"),
+      copilotDialog: document.getElementById("copilotDialog"),
+      closeCopilotButton: document.getElementById("closeCopilotButton"),
+      resetCopilotButton: document.getElementById("resetCopilotButton"),
+      copilotMessages: document.getElementById("copilotMessages"),
+      copilotSuggestions: document.getElementById("copilotSuggestions"),
+      copilotForm: document.getElementById("copilotForm"),
+      copilotInput: document.getElementById("copilotInput"),
+      copilotSend: document.getElementById("copilotSend"),
+      copilotProvider: document.getElementById("copilotProvider"),
+      openSettingsButton: document.getElementById("openSettingsButton"),
+      settingsDialog: document.getElementById("settingsDialog"),
+      closeSettingsButton: document.getElementById("closeSettingsButton"),
+      cancelSettingsButton: document.getElementById("cancelSettingsButton"),
+      settingsForm: document.getElementById("settingsForm"),
+      settingsSubmit: document.getElementById("settingsSubmit"),
+      connectorSummaryDot: document.getElementById("connectorSummaryDot"),
+      connectorSummaryText: document.getElementById("connectorSummaryText"),
+      aiProvider: document.getElementById("aiProvider"),
+      aiModel: document.getElementById("aiModel"),
+      aiModelField: document.getElementById("aiModelField"),
+      aiBaseUrl: document.getElementById("aiBaseUrl"),
+      aiBaseUrlField: document.getElementById("aiBaseUrlField"),
+      aiApiKey: document.getElementById("aiApiKey"),
+      aiKeyField: document.getElementById("aiKeyField"),
+      clearAiApiKey: document.getElementById("clearAiApiKey"),
+      clearAiKeyRow: document.getElementById("clearAiKeyRow"),
+      aiStatusTitle: document.getElementById("aiStatusTitle"),
+      aiStatusDetail: document.getElementById("aiStatusDetail"),
+      aiStatusDot: document.getElementById("aiStatusDot"),
+      searchProvider: document.getElementById("searchProvider"),
+      searchApiKey: document.getElementById("searchApiKey"),
+      searchKeyField: document.getElementById("searchKeyField"),
+      clearSearchApiKey: document.getElementById("clearSearchApiKey"),
+      clearSearchKeyRow: document.getElementById("clearSearchKeyRow"),
+      searchStatusTitle: document.getElementById("searchStatusTitle"),
+      searchStatusDetail: document.getElementById("searchStatusDetail"),
+      searchStatusDot: document.getElementById("searchStatusDot"),
+      aiMonthlyQuota: document.getElementById("aiMonthlyQuota"),
+      searchMonthlyQuota: document.getElementById("searchMonthlyQuota"),
+      mapMonthlyQuota: document.getElementById("mapMonthlyQuota"),
+      aiUsageLine: document.getElementById("aiUsageLine"),
+      searchUsageLine: document.getElementById("searchUsageLine"),
+      mapUsageLine: document.getElementById("mapUsageLine"),
+      aiKeysLink: document.getElementById("aiKeysLink"),
+      aiBalanceLink: document.getElementById("aiBalanceLink"),
+      searchBalanceLink: document.getElementById("searchBalanceLink"),
+      mapProvider: document.getElementById("mapProvider"),
+      mapApiKey: document.getElementById("mapApiKey"),
+      mapKeyField: document.getElementById("mapKeyField"),
+      clearMapApiKey: document.getElementById("clearMapApiKey"),
+      clearMapKeyRow: document.getElementById("clearMapKeyRow"),
+      mapStatusTitle: document.getElementById("mapStatusTitle"),
+      mapStatusDetail: document.getElementById("mapStatusDetail"),
+      mapStatusDot: document.getElementById("mapStatusDot")
+    };
+
+    let actionToken = "";
+    let activeProfile = null;
+    let trackedJobs = [];
+    let currentJobs = [];
+    let jobsExpanded = false;
+    let pendingApplyTotal = 0;
+    let dashboardLoading = false;
+    let connectorSettings = null;
+    let copilotSnapshot = null;
+    let copilotBusy = false;
+
+    const statusLabels = {
+      saved: "已收藏",
+      ready_to_apply: "待投递",
+      applied: "已投递",
+      hr_read: "HR 已读",
+      resume_requested: "索要简历",
+      screening: "筛选中",
+      assessment: "测评",
+      written_test: "笔试",
+      interview_1: "一面",
+      interview_2: "二面",
+      final_interview: "终面",
+      offer: "Offer",
+      rejected: "拒绝",
+      withdrawn: "已撤回",
+      no_response: "长期无反馈",
+      discovered: "已发现",
+      recommended: "推荐"
+    };
+
+    const trackLabels = {
+      daily_internship: "实习机会",
+      autumn_recruitment: "校招机会",
+      other: "其他机会"
+    };
+    const roleTierLabels = {
+      primary: "主攻方向",
+      secondary: "重点相邻",
+      stretch: "冲刺方向",
+      other: "方向待判断"
+    };
+    const strategyFitLabels = {
+      recommended: "边界清晰",
+      manual_review: "需要确认",
+      blocked: "已触发底线"
+    };
+
+    const recommendationLabels = {
+      strongly_recommend: "强烈推荐",
+      recommend: "推荐",
+      try: "可以尝试",
+      low_priority: "低优先级"
+    };
+
+    const priorityLabels = {
+      critical: "立即准备",
+      urgent: "今天优先",
+      high: "高优先级",
+      elevated: "重点关注",
+      routine: "常规准备",
+      closed: "已结束"
+    };
+
+    const commuteLabels = {
+      good: "通勤合适",
+      near_limit: "接近上限",
+      over_limit: "通勤超限",
+      unknown: "待估算"
+    };
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+    const numberText = (value) => new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(Number(value || 0));
+    const joinValues = (values) => Array.isArray(values) ? values.join("、") : "";
+    const splitValues = (value) => String(value || "").split(/[,，、;；\n]+/).map((item) => item.trim()).filter(Boolean);
+
+    const aiProviderLabels = {
+      local: "本地规则",
+      openai: "OpenAI",
+      openai_compatible: "兼容 API"
+    };
+    const searchProviderLabels = {
+      none: "手动导入",
+      bocha: "博查 Search",
+      brave: "Brave Search"
+    };
+    const mapProviderLabels = {
+      none: "手动估算",
+      amap: "高德地图"
+    };
+
+    const optionalPositiveInteger = (element) => {
+      const raw = String(element.value || "").trim();
+      return raw ? Number(raw) : null;
+    };
+
+    function usageText(counter) {
+      const used = Number(counter?.successful_requests || 0);
+      if (counter?.local_remaining !== null && counter?.local_remaining !== undefined) {
+        return `<strong>${escapeHtml(counter.local_remaining)}</strong> 次本机可用 · 已记录 ${escapeHtml(used)} 次成功请求`;
+      }
+      return `已记录 <strong>${escapeHtml(used)}</strong> 次成功请求 · 真实余额请查看服务商控制台`;
+    }
+
+    function syncConnectorFields() {
+      const aiProvider = elements.aiProvider.value;
+      const usesCloudAi = aiProvider !== "local";
+      const usesCompatible = aiProvider === "openai_compatible";
+      elements.aiModelField.hidden = !usesCloudAi;
+      elements.aiKeyField.hidden = !usesCloudAi;
+      elements.clearAiKeyRow.hidden = !usesCloudAi;
+      elements.aiBaseUrlField.hidden = !usesCompatible;
+      elements.aiModel.required = usesCloudAi;
+      elements.aiBaseUrl.required = usesCompatible;
+      const usesSearch = elements.searchProvider.value !== "none";
+      elements.searchKeyField.hidden = !usesSearch;
+      elements.clearSearchKeyRow.hidden = !usesSearch;
+      const usesMap = elements.mapProvider.value !== "none";
+      elements.mapKeyField.hidden = !usesMap;
+      elements.clearMapKeyRow.hidden = !usesMap;
+      if (!usesCloudAi) {
+        elements.aiApiKey.value = "";
+        elements.clearAiApiKey.checked = false;
+      }
+      if (!usesSearch) {
+        elements.searchApiKey.value = "";
+        elements.clearSearchApiKey.checked = false;
+      }
+      if (!usesMap) {
+        elements.mapApiKey.value = "";
+        elements.clearMapApiKey.checked = false;
+      }
+    }
+
+    function renderConnectorSettings(settings) {
+      connectorSettings = settings;
+      const ai = settings?.ai || { provider: "local", model: "local-explainable-v1", ready: true };
+      const search = settings?.search || { provider: "none", ready: true, enabled: false };
+      const maps = settings?.maps || { provider: "none", ready: true, enabled: false };
+      const usage = settings?.usage?.connectors || {};
+      elements.aiProvider.value = ai.provider || "local";
+      elements.aiModel.value = ai.provider === "local" ? "" : (ai.model || "");
+      elements.aiBaseUrl.value = ai.base_url || "";
+      elements.aiApiKey.value = "";
+      elements.clearAiApiKey.checked = false;
+      elements.searchProvider.value = search.provider || "none";
+      elements.searchApiKey.value = "";
+      elements.clearSearchApiKey.checked = false;
+      elements.mapProvider.value = maps.provider || "none";
+      elements.mapApiKey.value = "";
+      elements.clearMapApiKey.checked = false;
+      elements.aiMonthlyQuota.value = ai.monthly_quota || "";
+      elements.searchMonthlyQuota.value = search.monthly_quota || "";
+      elements.mapMonthlyQuota.value = maps.monthly_quota || "";
+      syncConnectorFields();
+
+      elements.aiStatusTitle.textContent = ai.provider === "local"
+        ? "本地能力可用"
+        : ai.ready ? "AI 已配置" : "等待密钥";
+      elements.aiStatusDetail.textContent = ai.provider === "local"
+        ? "本地可解释评分，不产生 API 费用"
+        : `${aiProviderLabels[ai.provider] || ai.provider} · ${ai.model || "模型未填写"}${ai.api_key_configured ? " · 密钥已保存，首次调用时验证" : ""}`;
+      elements.aiStatusDot.classList.toggle("ready", Boolean(ai.ready));
+
+      elements.searchStatusTitle.textContent = !search.enabled
+        ? "手动导入模式"
+        : search.ready ? "搜索可用" : "等待密钥";
+      elements.searchStatusDetail.textContent = !search.enabled
+        ? "不消耗搜索额度"
+        : `${searchProviderLabels[search.provider] || search.provider}${search.api_key_configured ? " · 密钥已配置" : " · 尚未配置密钥"}`;
+      elements.searchStatusDot.classList.toggle("ready", Boolean(search.ready));
+
+      elements.mapStatusTitle.textContent = !maps.enabled
+        ? "手动通勤模式"
+        : maps.ready ? "路线计算可用" : "等待密钥";
+      elements.mapStatusDetail.textContent = !maps.enabled
+        ? "不发送地址，可手动记录分钟"
+        : `${mapProviderLabels[maps.provider] || maps.provider}${maps.api_key_configured ? " · 密钥已配置" : " · 尚未配置密钥"}`;
+      elements.mapStatusDot.classList.toggle("ready", Boolean(maps.ready));
+      elements.aiUsageLine.innerHTML = usageText(usage.ai);
+      elements.searchUsageLine.innerHTML = usageText(usage.search);
+      elements.mapUsageLine.innerHTML = usageText(usage.maps);
+      elements.aiKeysLink.hidden = ai.provider !== "openai";
+      elements.aiBalanceLink.hidden = ai.provider !== "openai";
+      elements.searchBalanceLink.hidden = search.provider !== "bocha";
+
+      const allReady = Boolean(ai.ready && search.ready && maps.ready);
+      elements.connectorSummaryDot.classList.toggle("ready", allReady);
+      elements.connectorSummaryText.textContent = allReady
+        ? (ai.provider === "local" && !search.enabled ? "本地模式" : "配置已就绪")
+        : "需要设置 API";
+    }
+
+    async function loadConnectorSettings() {
+      const response = await fetch("/api/settings", { cache: "no-store" });
+      const settings = await readApiResponse(response);
+      renderConnectorSettings(settings);
+      return settings;
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "—";
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return "—";
+      return new Intl.DateTimeFormat("zh-CN", {
+        month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+        hour12: false, timeZone: "Asia/Shanghai"
+      }).format(parsed);
+    }
+
+    function relativeFreshness(value) {
+      const timestamp = new Date(value).getTime();
+      if (!Number.isFinite(timestamp)) return "更新时间未知";
+      const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+      if (minutes < 1) return "数据刚刚更新";
+      if (minutes < 60) return `${minutes} 分钟前更新`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return `${hours} 小时前更新`;
+      return `${Math.round(hours / 24)} 天前更新`;
+    }
+
+    function safeExternalUrl(raw) {
+      try {
+        const url = new URL(String(raw));
+        if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return null;
+        return url.href;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function statusBadgeClass(status) {
+      if (["resume_requested", "screening", "assessment", "written_test", "interview_1", "interview_2", "final_interview", "offer"].includes(status)) return "positive";
+      if (["rejected", "withdrawn", "no_response"].includes(status)) return "closed";
+      if (["ready_to_apply", "applied", "hr_read"].includes(status)) return "info";
+      return "";
+    }
+
+    function strategyBadgeClass(fit) {
+      if (fit === "recommended") return "positive";
+      if (fit === "blocked") return "closed";
+      return "warning";
+    }
+
+    function priorityBadgeClass(priority) {
+      if (["critical", "urgent"].includes(priority)) return "warning";
+      if (["high", "elevated"].includes(priority)) return "positive";
+      if (priority === "closed") return "closed";
+      return "";
+    }
+
+    function commuteBadgeClass(fit) {
+      if (fit === "good") return "positive";
+      if (fit === "near_limit") return "warning";
+      if (fit === "over_limit") return "closed";
+      return "info";
+    }
+
+    function commuteText(job) {
+      const label = commuteLabels[job.commute_fit] || "待估算";
+      if (job.commute_minutes === null || job.commute_minutes === undefined) return label;
+      const fitLabel = job.commute_fit === "unknown" ? "上限未设置" : label;
+      if (Number(job.commute_minutes) === 0) return `远程 · ${fitLabel}`;
+      return `${job.commute_minutes} 分钟 · ${fitLabel}`;
+    }
+
+    function compensationText(job) {
+      if (job.opportunity_track !== "daily_internship") return "薪资按正式岗位核实";
+      if (job.compensation_min_daily === null || job.compensation_min_daily === undefined) return "日薪待确认";
+      if (job.compensation_max_daily && job.compensation_max_daily !== job.compensation_min_daily) {
+        return `${job.compensation_min_daily}–${job.compensation_max_daily} 元/天`;
+      }
+      return `${job.compensation_min_daily} 元/天`;
+    }
+
+    function renderProfile(profile) {
+      activeProfile = profile || null;
+      if (!profile) {
+        elements.profileSummary.querySelector(".profile-main").innerHTML = `
+          <div class="profile-name">还没有建立个人求职资料</div>
+          <div class="profile-meta">上传简历并填写目标岗位后，Agent 才能按照这个人的情况搜索和匹配。</div>`;
+        elements.openProfileButton.textContent = "建立个人资料";
+        elements.preferenceRoles.textContent = "先建立个人资料";
+        elements.preferenceScope.textContent = "填写目标岗位和工作城市后，Agent 才能定向搜索。";
+        elements.preferenceCommute.textContent = "通勤边界尚未设置";
+        elements.openPreferencesButton.disabled = true;
+        return;
+      }
+      elements.openPreferencesButton.disabled = false;
+      const tags = [
+        ...(profile.target_roles || []),
+        ...(profile.preferred_locations || []),
+        ...(profile.employment_types || [])
+      ].slice(0, 8);
+      const identity = profile.display_name || "当前用户";
+      const stage = profile.stage || "求职阶段未填写";
+      const availability = profile.availability || "到岗条件未填写";
+      const commute = profile.max_one_way_minutes
+        ? `通勤：${profile.commute_origin || "起点未填写"} · 单程 ≤ ${profile.max_one_way_minutes} 分钟`
+        : "通勤上限未填写";
+      elements.profileSummary.querySelector(".profile-main").innerHTML = `
+        <div class="profile-name">当前资料：${escapeHtml(identity)}</div>
+        <div class="profile-meta">${escapeHtml(stage)} · ${escapeHtml(availability)} · ${escapeHtml(commute)} · ${escapeHtml(profile.resume_count || 0)} 份简历 · ${escapeHtml(profile.confirmed_fact_count || 0)} 条已确认事实 · ${escapeHtml(profile.skill_count || 0)} 项技能</div>
+        ${tags.length ? `<div class="tag-list">${tags.map((tag) => `<span class="profile-tag">${escapeHtml(tag)}</span>`).join("")}</div>` : ""}`;
+      elements.openProfileButton.textContent = "更新简历与需求";
+      const roleText = [...(profile.target_roles || []), ...(profile.adjacent_roles || [])].join(" / ") || "目标岗位未填写";
+      const scopeParts = [
+        (profile.target_industries || []).join("、"),
+        (profile.preferred_locations || []).join("、"),
+        (profile.employment_types || []).join("、"),
+        profile.internship_daily_pay_floor !== null && profile.internship_daily_pay_floor !== undefined
+          ? `实习日薪 ≥ ${profile.internship_daily_pay_floor} 元`
+          : "实习薪资待确认",
+        profile.exclude_outsourcing ? "不接受外包" : "外包人工判断"
+      ].filter(Boolean);
+      elements.preferenceRoles.textContent = roleText;
+      elements.preferenceScope.textContent = scopeParts.join(" · ") || "行业与地点边界尚未完整填写";
+      const modeText = (profile.transport_modes || []).join("、") || "交通方式不限";
+      elements.preferenceCommute.textContent = profile.max_one_way_minutes
+        ? `${profile.commute_origin || "出发地址未填"} → 单程 ≤ ${profile.max_one_way_minutes} 分钟`
+        : `${profile.commute_origin || "出发地址未填"} · 单程上限未设置`;
+      elements.preferenceCommute.title = `${modeText}${profile.remote_acceptable ? " · 接受远程" : ""}`;
+    }
+
+    function renderTrackedJobs(jobs) {
+      trackedJobs = jobs || [];
+      const previousStatus = elements.statusJob.value;
+      const previousCommute = elements.commuteJob.value;
+      const previousRoute = elements.routeJob.value;
+      if (!jobs.length) {
+        elements.statusJob.innerHTML = '<option value="">暂无岗位，请先搜索并导入岗位</option>';
+        elements.commuteJob.innerHTML = '<option value="">暂无岗位，请先搜索并导入岗位</option>';
+        elements.routeJob.innerHTML = '<option value="">暂无岗位，请先搜索并导入岗位</option>';
+        elements.statusSubmit.disabled = true;
+        elements.commuteSubmit.disabled = true;
+        elements.routeSubmit.disabled = true;
+        return;
+      }
+      elements.statusSubmit.disabled = false;
+      elements.commuteSubmit.disabled = false;
+      elements.routeSubmit.disabled = false;
+      const options = jobs.map((job) => {
+        const current = statusLabels[job.status] || job.status || "已发现";
+        return `<option value="${escapeHtml(job.job_id)}">#${escapeHtml(job.job_id)} · ${escapeHtml(job.company)} · ${escapeHtml(job.title)}（${escapeHtml(current)}）</option>`;
+      }).join("");
+      elements.statusJob.innerHTML = options;
+      elements.commuteJob.innerHTML = options;
+      elements.routeJob.innerHTML = options;
+      if (jobs.some((job) => String(job.job_id) === previousStatus)) elements.statusJob.value = previousStatus;
+      if (jobs.some((job) => String(job.job_id) === previousCommute)) elements.commuteJob.value = previousCommute;
+      if (jobs.some((job) => String(job.job_id) === previousRoute)) elements.routeJob.value = previousRoute;
+      prefillCommuteForJob();
+      prefillRouteForJob();
+    }
+
+    function prefillCommuteForJob() {
+      const job = trackedJobs.find((item) => String(item.job_id) === elements.commuteJob.value);
+      if (!job) {
+        elements.commuteMinutes.value = "";
+        elements.commuteNote.value = "";
+        elements.commuteMethod.value = "user_estimate";
+        updateCommuteMethodInput();
+        return;
+      }
+      elements.commuteMinutes.value = job.commute_minutes ?? "";
+      elements.commuteNote.value = job.commute_note || "";
+      const supportedMethods = ["user_estimate", "route_estimate", "remote", "unknown"];
+      elements.commuteMethod.value = supportedMethods.includes(job.commute_method)
+        ? job.commute_method
+        : "user_estimate";
+      updateCommuteMethodInput();
+    }
+
+    function prefillRouteForJob() {
+      const job = trackedJobs.find((item) => String(item.job_id) === elements.routeJob.value);
+      if (!job) {
+        elements.commuteDestination.value = "";
+        elements.routeResult.classList.remove("visible");
+        elements.routeResult.innerHTML = "";
+        return;
+      }
+      elements.commuteDestination.value = job.commute_destination || "";
+      if (job.commute_mode && ["transit", "driving", "walking", "bicycling"].includes(job.commute_mode)) {
+        elements.routeMode.value = job.commute_mode;
+      }
+      if (job.commute_route_summary) {
+        const distance = job.commute_distance_meters
+          ? `${(Number(job.commute_distance_meters) / 1000).toFixed(1)} 公里`
+          : "距离未返回";
+        elements.routeResult.innerHTML = `<strong>已保存路线 · ${escapeHtml(job.commute_minutes ?? "—")} 分钟</strong><div class="usage-line">${escapeHtml(distance)} · ${escapeHtml(job.commute_route_summary)}</div>`;
+        elements.routeResult.classList.add("visible");
+      } else {
+        elements.routeResult.classList.remove("visible");
+        elements.routeResult.innerHTML = "";
+      }
+    }
+
+    function updateCommuteMethodInput() {
+      const clearing = elements.commuteMethod.value === "unknown";
+      elements.commuteMinutes.required = !clearing;
+      elements.commuteMinutes.disabled = clearing;
+      if (clearing) elements.commuteMinutes.value = "";
+      if (elements.commuteMethod.value === "remote") elements.commuteMinutes.value = "0";
+    }
+
+    function prefillProfileForm() {
+      elements.profileForm.reset();
+      elements.profileMode.value = "update";
+      elements.replaceConfirm.classList.remove("visible");
+      const replaceCheckbox = elements.replaceConfirm.querySelector('input[name="confirm_replace"]');
+      replaceCheckbox.required = false;
+      syncProfileRequirements();
+      if (!activeProfile) return;
+      const values = {
+        displayName: activeProfile.display_name,
+        stage: activeProfile.stage,
+        targetRoles: joinValues(activeProfile.target_roles),
+        adjacentRoles: joinValues(activeProfile.adjacent_roles),
+        targetIndustries: joinValues(activeProfile.target_industries),
+        preferredLocations: joinValues(activeProfile.preferred_locations),
+        employmentTypes: joinValues(activeProfile.employment_types) || "实习",
+        mustHaves: joinValues(activeProfile.must_haves),
+        avoid: joinValues(activeProfile.avoid),
+        earliestStart: activeProfile.earliest_start,
+        daysPerWeek: activeProfile.days_per_week,
+        durationMonths: activeProfile.duration_months,
+        commuteOrigin: activeProfile.commute_origin,
+        maxCommuteMinutes: activeProfile.max_one_way_minutes,
+        transportModes: joinValues(activeProfile.transport_modes)
+      };
+      Object.entries(values).forEach(([id, value]) => {
+        const field = document.getElementById(id);
+        if (field && value !== null && value !== undefined) field.value = value;
+      });
+      document.getElementById("remoteAcceptable").checked = Boolean(activeProfile.remote_acceptable);
+    }
+
+    function syncProfileRequirements() {
+      const replacing = elements.profileMode.value === "replace";
+      const hasResume = Boolean(elements.resumeFile.files?.length);
+      elements.resumeFile.required = replacing || !activeProfile;
+      elements.confirmTruth.required = hasResume || replacing || !activeProfile;
+      if (!elements.confirmTruth.required) elements.confirmTruth.checked = false;
+    }
+
+    function renderMetrics(metrics) {
+      const byId = new Map(metrics.map((metric) => [metric.metric_id, metric]));
+      const pending = byId.get("pending_apply") || { value: 0, unit: "" };
+      const preparation = byId.get("priority_preparation") || { value: 0, unit: "" };
+      const feedback = byId.get("new_feedback") || { value: 0, unit: "" };
+      const supportingOrder = ["candidates", "jobs", "recommended", "strongly_recommended", "applied", "meaningful_response_rate", "outsourcing_filtered", "pay_to_confirm"];
+      const supportingMetrics = supportingOrder.map((id) => byId.get(id)).filter(Boolean);
+      const missionValues = {
+        missionPending: pending.value,
+        missionCandidates: byId.get("candidates")?.value || 0,
+        missionRecommended: byId.get("recommended")?.value || 0,
+        missionConfirm: pending.value,
+        missionApplied: byId.get("applied")?.value || 0,
+        missionFeedback: feedback.value
+      };
+      Object.entries(missionValues).forEach(([key, value]) => {
+        if (elements[key]) elements[key].textContent = numberText(value);
+      });
+      pendingApplyTotal = Number(pending.value || 0);
+      elements.queueButton.textContent = pendingApplyTotal > 0
+        ? `处理 ${numberText(pendingApplyTotal)} 个待确认`
+        : "暂无待确认岗位";
+      elements.queueButton.disabled = dashboardLoading || pendingApplyTotal <= 0;
+      elements.metrics.innerHTML = `
+        <div class="metrics-narrative">
+          <div class="metrics-command" aria-label="今天需要处理">
+            <div class="metric-clause"><span>待确认投递</span><strong class="signal">${escapeHtml(numberText(pending.value))}</strong><small>个岗位</small></div>
+            <div class="metric-clause"><span>优先准备</span><strong>${escapeHtml(numberText(preparation.value))}</strong><small>项任务</small></div>
+            <div class="metric-clause"><span>最新反馈</span><strong>${escapeHtml(numberText(feedback.value))}</strong><small>条变化</small></div>
+          </div>
+          <div class="metrics-inline-list" aria-label="求职数据概览">
+          ${supportingMetrics.map((metric) => `
+            <span class="metric-inline" title="${escapeHtml(metric.description)}">
+              <span>${escapeHtml(metric.label)}</span>
+              <strong>${escapeHtml(numberText(metric.value))}${metric.unit ? escapeHtml(metric.unit) : ""}</strong>
+            </span>`).join("")}
+          </div>
+        </div>`;
+    }
+
+    function renderFunnel(stages) {
+      if (!stages.length) {
+        elements.funnel.innerHTML = '<div class="empty-state">还没有可展示的漏斗数据。</div>';
+        return;
+      }
+      const maxValue = Math.max(1, Number(stages[0].value || 0), ...stages.map((item) => Number(item.value || 0)));
+      elements.funnel.innerHTML = `<div class="funnel-list">${stages.map((stage) => {
+        const value = Number(stage.value || 0);
+        const width = value === 0 ? 0 : Math.max(2.5, Math.min(100, (value / maxValue) * 100));
+        return `
+          <div class="funnel-row" title="${escapeHtml(stage.definition)}">
+            <span class="funnel-label">${escapeHtml(stage.label)}</span>
+            <div class="funnel-track" aria-label="${escapeHtml(stage.label)} ${value}">
+              <div class="funnel-fill" style="width:${width.toFixed(1)}%"></div>
+            </div>
+            <span class="funnel-value">${escapeHtml(numberText(value))}</span>
+          </div>`;
+      }).join("")}</div>`;
+    }
+
+    let selectedJobId = null;
+    let jobFilter = "all";
+    let jobTrack = null;
+    let detailRequest = 0;
+    let detailTab = "jd";
+    let workspaceDetails = null;
+    let copilotHistory = false;
+    const composerDrafts = new Map();
+    const $ = (id) => document.getElementById(id);
+    const pendingStatuses = new Set(["discovered", "saved", "ready_to_apply", "matched", "recommended"]);
+
+    function showWorkspace(overview = false) {
+      $("jobWorkspace").hidden = overview;
+      $("overviewPanel").hidden = !overview;
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+      for (const [id, active] of [["workspaceNav", !overview], ["overviewNav", overview]]) {
+        $(id).classList.toggle("active", active);
+        if (active) $(id).setAttribute("aria-current", "page");
+        else $(id).removeAttribute("aria-current");
+      }
+    }
+
+    function renderJobs(jobs) {
+      currentJobs = jobs;
+      const query = $("jobSearch").value.trim().toLocaleLowerCase();
+      const visible = jobs.filter((job) => {
+        const pending = pendingStatuses.has(job.status);
+        return (jobTrack === "all" || jobTrack === null || job.opportunity_track === jobTrack)
+          && (jobFilter === "all" || (jobFilter === "pending" ? pending : !pending))
+          && (job.company + " " + job.title + " #" + job.job_id).toLocaleLowerCase().includes(query);
+      });
+      elements.jobsCount.textContent = String(visible.length);
+      document.querySelectorAll("[data-job-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobFilter === jobFilter)));
+      document.querySelectorAll("[data-job-track]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobTrack === jobTrack)));
+      elements.jobs.innerHTML = visible.length ? visible.map(job => `
+        <button class="job-choice" type="button" data-select-job="${job.job_id}" aria-current="${String(job.job_id) === String(selectedJobId) ? "true" : "false"}">
+          <strong class="choice-title">${escapeHtml(job.title)}</strong>
+          <span class="choice-company">${escapeHtml(job.company)}<span class="choice-score" title="本地匹配分，满分 100">${escapeHtml(job.match_score ?? "—")}</span></span>
+          <span class="choice-signals"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span class="${escapeHtml(strategyBadgeClass(job.strategy_fit))}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "待判断")}</span></span>
+          <span class="choice-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span>${escapeHtml(statusLabels[job.status] || job.status)}</span></span>
+        </button>`).join("") : '<div class="empty-state">没有符合条件的职位。<button type="button" class="text-link" data-clear-search>清除筛选</button></div>';
+      if (!visible.some(job => String(job.job_id) === String(selectedJobId))) selectJob(visible[0]?.job_id ?? null, false);
+    }
+
+    function renderStrategyPlan(strategy) {
+      if (!strategy) return;
+      $("internshipShare").textContent = `${strategy.daily_internship_share}%`;
+      $("autumnShare").textContent = `${strategy.autumn_recruitment_share}%`;
+      $("trackPlan").textContent = strategy.rule_label || "按当前求职阶段安排两个通道。";
+      $("trackPlan").title = `近 30 天已投 ${strategy.applications_last_30_days || 0}，有效推进 ${strategy.meaningful_progress_last_30_days || 0}；每批 ${strategy.experiment_batch_size || 20} 份。`;
+      if (jobTrack === null) jobTrack = strategy.recommended_track || "daily_internship";
+    }
+
+    function selectJob(jobId, reveal = true) {
+      if (selectedJobId != null) composerDrafts.set(String(selectedJobId), elements.copilotInput.value);
+      selectedJobId = jobId == null ? null : Number(jobId);
+      elements.copilotInput.value = composerDrafts.get(String(selectedJobId)) || "";
+      workspaceDetails = null;
+      detailTab = "jd";
+      document.querySelectorAll("[data-select-job]").forEach(button => button.setAttribute("aria-current", String(Number(button.dataset.selectJob) === selectedJobId)));
+      const job = currentJobs.find(item => item.job_id === selectedJobId);
+      $("copilotScope").textContent = job ? `#${job.job_id} · ${job.company}` : "未选择职位";
+      if (reveal) $("jobWorkspace").classList.add("detail-visible");
+      renderJobDetail(job);
+      if (copilotSnapshot) renderCopilot(copilotSnapshot);
+      loadJobDetail(job);
+    }
+
+    function renderJobDetail(job) {
+      if (!job) {
+        $("jobDetail").innerHTML = '<div class="empty-state">选择一个职位，开始准备。</div>';
+        return;
+      }
+      const w = job.workspace || {};
+      const status = w.resume_status || "missing";
+      const external = safeExternalUrl(job.source_url);
+      $("jobDetail").innerHTML = `
+        <div class="detail-scroll">
+          <button class="mobile-back text-link" type="button" data-detail-action="back">返回职位</button>
+          <header class="position-head">
+            <h2 tabindex="-1">${escapeHtml(job.title)}</h2>
+            <div class="position-company"><span>${escapeHtml(job.company)}</span><span>#${job.job_id}</span></div>
+            <div class="position-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span class="badge ${statusBadgeClass(job.status)}">${escapeHtml(statusLabels[job.status] || job.status)}</span>${external ? `<a class="text-link" href="${escapeHtml(external)}" target="_blank" rel="noopener noreferrer">查看原职位</a>` : ""}</div>
+            <div class="position-strategy" aria-label="岗位策略判断"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span>${escapeHtml(roleTierLabels[job.role_tier] || "方向待判断")}</span><span>${escapeHtml(compensationText(job))}</span><span class="badge ${strategyBadgeClass(job.strategy_fit)}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "需要判断")}</span>${job.deadline_urgent ? `<strong>截止仅余 ${escapeHtml(job.deadline_days)} 天</strong>` : ""}</div>
+          </header>
+          <div class="position-tasks" aria-label="岗位专属任务">
+            <section class="position-task resume-section">
+              <div class="task-heading"><h3>简历草稿</h3><span>${status === "ready" ? "已批准" : status === "needs_review" ? "待审阅" : "未生成"}</span></div>
+              ${status === "missing" ? '<details class="secondary-explanation"><summary>生成说明</summary><p>从已确认经历生成，针对这份 JD。</p></details>' : `<p>${status === "needs_review" ? "检查 PDF 后，确认可用于申请。" : "修改内容后，需要重新审阅。"}</p>`}
+              <div class="task-controls">
+                <button class="action-button resume-task" type="button" data-detail-action="${status === "missing" ? "create-resume" : "open-resume"}">${status === "missing" ? "生成草稿" : "打开 PDF"}</button>
+                ${w.resume_editable ? '<button class="action-button secondary" type="button" data-detail-action="edit-resume">编辑</button><button class="text-link" type="button" data-detail-action="ask-agent-resume">让 Agent 修改</button>' : ""}
+                ${status === "needs_review" || (status === "ready" && !w.application_pack_ready) ? `<button class="text-link approval-link" type="button" data-detail-action="approve-resume">${status === "needs_review" ? "我已审阅，批准草稿" : "准备投递材料"}</button>` : ""}
+              </div>
+            </section>
+            <section class="position-task fill-section">
+              <div class="task-heading"><h3>人工投递准备</h3><span>${w.safe_fill_ready ? "可开始" : "未就绪"}</span></div>
+              <p id="fillBlocker">${w.safe_fill_ready ? "打开岗位页，并在文件夹中选中已批准的岗位专用 PDF。" : escapeHtml((w.blockers || [])[0] || "先生成并批准这个职位的简历。")}</p>
+              <button class="action-button secondary safe-fill-task" type="button" data-detail-action="manual-apply" aria-describedby="fillBlocker" ${w.safe_fill_ready ? "" : "disabled"}>打开岗位页与简历</button>
+              <span class="fill-boundary">登录、作品集、表单与提交由你完成</span>
+            </section>
+          </div>
+          <nav class="detail-tabs" aria-label="职位详情">
+            <button type="button" data-detail-tab="jd" aria-pressed="true">职位描述</button>
+            <button type="button" data-detail-tab="match" aria-pressed="false">匹配依据 <span>${escapeHtml(job.match_score ?? "—")}</span></button>
+            <button type="button" data-detail-tab="project" aria-pressed="false">项目工坊</button>
+            <button type="button" data-detail-tab="progress" aria-pressed="false">投递记录</button>
+          </nav>
+          <div id="positionContent" class="position-content" aria-live="polite"><div class="empty-state">正在读取岗位详情…</div></div>
+        </div>
+        <div class="position-toolbar">
+          <button type="button" class="text-link" data-detail-action="status">更新进度</button>
+          <button type="button" class="text-link" data-detail-action="commute">${escapeHtml(commuteText(job))} · 通勤</button>
+          <button type="button" class="text-link" data-detail-action="interview">面试准备</button>
+        </div>`;
+    }
+
+    async function loadJobDetail(job) {
+      const request = ++detailRequest;
+      if (!job) return;
+      try {
+        const response = await fetch(`/api/jobs/${job.job_id}/detail`, {cache: "no-store"});
+        const data = await readApiResponse(response);
+        if (request !== detailRequest) return;
+        workspaceDetails = data;
+        renderPositionContent();
+      } catch (error) {
+        if (request !== detailRequest) return;
+        $("positionContent").innerHTML = `<div class="empty-state">详情读取失败：${escapeHtml(error.message)}<button type="button" class="text-link" data-detail-action="retry">重试</button></div>`;
+      }
+    }
+
+    function renderProjectWorkshop(project) {
+      if (!project) return '<div class="empty-state">项目建议暂时无法读取。</div>';
+      const recommendation = project.recommendation || {};
+      const capabilityList = (recommendation.capabilities || []).map(item => `<span>${escapeHtml(item)}</span>`).join("");
+      const gapList = (recommendation.gaps || []).length
+        ? `<ul class="workshop-gaps">${recommendation.gaps.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+        : '<p class="quiet">当前匹配结果没有保存明确缺口；先用模板练习可验证的岗位能力。</p>';
+      const flow = `<ol class="workshop-flow"><li><span>1</span><strong>看懂</strong><small>先理解输入、规则、输出</small></li><li><span>2</span><strong>改一处</strong><small>改问题、重点或阈值</small></li><li><span>3</span><strong>跑通</strong><small>用合成数据重新验证</small></li><li><span>4</span><strong>讲明白</strong><small>演示并用自己的话解释</small></li></ol>`;
+      if (project.status === "idea") return `
+        <section class="workshop-shell">
+          <div class="workshop-eyebrow">JD → 能力缺口 → 真实可讲项目</div>
+          <div class="workshop-heading"><div><h3>${escapeHtml(recommendation.title || "岗位项目")}</h3><p>${escapeHtml(recommendation.why || "")}</p></div><span>${escapeHtml(recommendation.duration || "1–3 天")}</span></div>
+          <div class="workshop-capabilities">${capabilityList}</div>
+          <section class="workshop-gap-panel"><h4>这份 JD 值得补什么</h4>${gapList}</section>
+          ${flow}
+          <div class="workshop-boundary">${escapeHtml(recommendation.truth_boundary || "")}</div>
+          <button class="action-button workshop-primary" type="button" data-detail-action="run-project">生成并运行安全项目</button>
+        </section>`;
+      const config = project.config || {};
+      const requirements = project.requirements || {};
+      const requirement = (done, label) => `<span class="${done ? "done" : ""}">${done ? "已完成" : "待完成"} · ${escapeHtml(label)}</span>`;
+      return `
+        <section class="workshop-shell">
+          <div class="workshop-eyebrow">${escapeHtml(project.status_label || "项目工坊")}</div>
+          <div class="workshop-heading"><div><h3>${escapeHtml(recommendation.title || "岗位项目")}</h3><p>${escapeHtml(recommendation.why || "")}</p></div><span>${escapeHtml(recommendation.duration || "1–3 天")}</span></div>
+          ${flow}
+          <div class="workshop-checks">${requirement(requirements.ran, "当前版本已跑通")}${requirement(requirements.modified, "本人修改关键设置")}${requirement(requirements.demo_confirmed, "本人看过演示")}${requirement(requirements.explained, "本人能解释")}</div>
+          ${project.resume_eligible ? '<div class="workshop-ready"><strong>可以进入经历库候选</strong><span>仍不会自动写进简历；加入前要由你再次确认真实表述。</span></div>' : ""}
+          <div class="workshop-editor">
+            <div class="field full"><label for="projectName">项目名称</label><input id="projectName" maxlength="80" value="${escapeHtml(config.project_name || "")}"></div>
+            <div class="field full"><label for="projectQuestion">这个项目要回答什么问题？</label><textarea id="projectQuestion" rows="2" maxlength="240">${escapeHtml(config.question || "")}</textarea><div class="form-help">把它想成“我到底想从这堆积木里看懂什么”。</div></div>
+            <div class="field full"><label for="projectFocus">你要突出什么能力？</label><textarea id="projectFocus" rows="2" maxlength="240">${escapeHtml(config.focus || "")}</textarea></div>
+            <div class="field"><label for="projectThreshold">判断阈值（1–100）</label><input id="projectThreshold" type="number" min="1" max="100" step="1" value="${escapeHtml(config.threshold ?? 75)}"></div>
+            <div class="workshop-actions"><button class="action-button secondary" type="button" data-detail-action="rerun-project">保存修改并重新运行</button>${project.preview_url ? `<a class="action-button ghost" href="${escapeHtml(project.preview_url)}" target="_blank" rel="noopener">打开演示页</a>` : ""}</div>
+          </div>
+          <div class="workshop-verification">
+            <h4>简历准入检查</h4>
+            <div class="field full"><label for="projectExplanation">用自己的话讲：问题、你改了什么、结果、下一步</label><textarea id="projectExplanation" rows="5" maxlength="2000" placeholder="至少 80 个字。不是考试；说清楚你真的理解了什么。"></textarea></div>
+            <label class="checkbox-row"><input id="projectDemoConfirmed" type="checkbox">我已打开演示页并检查结果。</label>
+            <label class="checkbox-row"><input id="projectUnderstandingConfirmed" type="checkbox">我能解释输入、规则和输出，也会如实说明 AI 辅助。</label>
+            <button class="action-button workshop-primary" type="button" data-detail-action="verify-project" ${project.resume_eligible ? "disabled" : ""}>${project.resume_eligible ? "已通过准入" : "验证为简历可用"}</button>
+          </div>
+          <div class="workshop-boundary">只运行内置固定计算；只用合成数据；不执行 AI 生成代码、外部命令或管理员操作。</div>
+        </section>`;
+    }
+
+    function renderPositionContent() {
+      document.querySelectorAll("[data-detail-tab]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.detailTab === detailTab)));
+      const host = $("positionContent");
+      if (!host || !workspaceDetails) return;
+      const d = workspaceDetails;
+      const list = (items, empty) => items?.length ? `<ul class="evidence-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : `<p class="quiet">${empty}</p>`;
+      if (detailTab === "jd") host.innerHTML = `<div class="jd-text">${escapeHtml(d.job.jd_text || "暂无完整 JD，请打开原始职位核实。")}</div>`;
+      else if (detailTab === "match") {
+        const insight = d.match_insight || {};
+        const strategy = d.strategy || {};
+        host.innerHTML = `<section class="evidence-section"><h3>匹配证据</h3>${list(insight.why_fit, "暂无已保存的匹配依据，不能仅凭分数判断。")}</section><section class="evidence-section"><h3>需要补足</h3>${list(insight.gaps, "暂无已记录的差距，不代表满足全部要求。")}</section>${(insight.hard_gates || []).length ? `<section class="evidence-section"><h3>硬性要求</h3>${list(insight.hard_gates.map(g => `${g.requirement} · ${({passes:"符合", fails:"未满足", unknown:"待核实"})[g.status] || g.status}`), "")}</section>` : ""}<section class="evidence-section strategy-evidence"><h3>投入边界 · ${escapeHtml(strategyFitLabels[strategy.strategy_fit] || "待判断")}</h3>${list(strategy.reasons, "尚未形成策略判断。")}</section>`;
+      } else if (detailTab === "project") {
+        host.innerHTML = renderProjectWorkshop(d.project_workshop);
+      } else {
+        host.innerHTML = d.events.length ? `<ol class="position-timeline">${d.events.slice().reverse().map(item => `<li><strong>${escapeHtml(statusLabels[item.status] || item.status)}</strong><time>${escapeHtml(formatDateTime(item.occurred_at))}</time>${item.detail ? `<p>${escapeHtml(item.detail)}</p>` : ""}</li>`).join("")}</ol>` : '<div class="empty-state">还没有投递记录。完成申请后，可在下方更新进度。</div>';
+      }
+    }
+
+    function renderCandidateBreakdown(rows) {
+      const total = rows.reduce((sum, row) => sum + Number(row.value || 0), 0);
+      if (!rows.length || total === 0) {
+        elements.candidateBreakdown.innerHTML = '<div class="empty-state">还没有搜索候选。运行岗位发现后，这里会显示核验质量。</div>';
+        return;
+      }
+      elements.candidateBreakdown.innerHTML = `
+        <div class="breakdown-total">${escapeHtml(numberText(total))}</div>
+        <div class="breakdown-caption">条已去重候选链接</div>
+        <div class="breakdown-list">${rows.map((row) => {
+          const share = Math.max(0, Math.min(100, Number(row.value || 0) / total * 100));
+          return `<div>
+            <div class="breakdown-top"><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(numberText(row.value))}</strong></div>
+            <div class="mini-track"><div class="mini-fill ${escapeHtml(row.tone || "")}" style="width:${share.toFixed(1)}%"></div></div>
+          </div>`;
+        }).join("")}</div>`;
+    }
+
+    function renderPreparation(rows) {
+      elements.prepCount.textContent = `${rows.length} 项`;
+      if (!rows.length) {
+        elements.preparation.innerHTML = '<div class="empty-state">目前没有需要提高优先级的岗位。HR 索要简历、进入筛选、测评或面试后会自动置顶；单纯已读只记录。</div>';
+        return;
+      }
+      elements.preparation.innerHTML = `<div class="card-list">${rows.map((row) => {
+        const tracked = trackedJobs.find((item) => String(item.job_id) === String(row.job_id));
+        const resumeEditable = Boolean(tracked && tracked.workspace && tracked.workspace.resume_editable);
+        return `
+        <article class="work-card">
+          <div class="work-card-top">
+            <div>
+              <div class="work-card-company">${escapeHtml(row.company)}</div>
+              <h3 class="work-card-title">#${escapeHtml(row.job_id)} ${escapeHtml(row.title)}</h3>
+            </div>
+            <div class="work-card-score">${escapeHtml(row.match_score ?? "—")}</div>
+          </div>
+          <div class="work-card-meta">
+            <span class="badge ${priorityBadgeClass(row.priority)}">${escapeHtml(priorityLabels[row.priority] || row.priority)}</span>
+            <span class="badge ${statusBadgeClass(row.application_status)}">${escapeHtml(statusLabels[row.application_status] || row.application_status)}</span>
+          </div>
+          <div class="work-card-action">
+            ${row.preparation_path ? `<a class="text-link" href="/preparation/${encodeURIComponent(row.job_id)}" target="_blank" rel="noopener">打开学习与面试包</a>` : '<span class="timeline-detail">学习包尚未生成</span>'}
+            ${resumeEditable ? `<button class="action-button compact secondary" type="button" data-action="ask-agent-resume" data-job-id="${escapeHtml(row.job_id)}">让 Agent 改简历</button>` : ""}
+          </div>
+        </article>`;
+      }).join("")}</div>`;
+    }
+
+    function renderFeedback(rows) {
+      if (!rows.length) {
+        elements.feedback.innerHTML = '<div class="empty-state">还没有投递进度事件。完成投递核验或手动更新状态后会出现在这里。</div>';
+        return;
+      }
+      elements.feedback.innerHTML = `<div class="timeline">${rows.map((row) => {
+        const previous = row.previous_status ? (statusLabels[row.previous_status] || row.previous_status) : "新建记录";
+        const current = statusLabels[row.status] || row.status;
+        return `<article class="timeline-item">
+          <span class="timeline-dot" aria-hidden="true"></span>
+          <div>
+            <div class="timeline-title">${escapeHtml(row.company)} · ${escapeHtml(row.title)}</div>
+            <div class="timeline-change">${escapeHtml(previous)} → <strong>${escapeHtml(current)}</strong></div>
+            ${row.detail ? `<div class="timeline-detail">${escapeHtml(row.detail)}</div>` : ""}
+            <div class="timeline-time">${escapeHtml(formatDateTime(row.occurred_at))} · ${escapeHtml(row.source)}</div>
+          </div>
+        </article>`;
+      }).join("")}</div>`;
+    }
+
+    function renderMethodology(data) {
+      const metricDefinitions = data.metrics.map((metric) => `
+        <div class="definition-item"><strong>${escapeHtml(metric.label)}：</strong>${escapeHtml(metric.description)}</div>
+      `).join("");
+      const funnelDefinitions = data.funnel.map((stage) => `
+        <div class="definition-item"><strong>${escapeHtml(stage.label)}：</strong>${escapeHtml(stage.definition)}</div>
+      `).join("");
+      const caveats = (data.caveats || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+      elements.methodology.innerHTML = `
+        <details>
+          <summary>核心指标定义</summary>
+          <div class="definition-list">${metricDefinitions}</div>
+        </details>
+        <details>
+          <summary>漏斗阶段定义</summary>
+          <div class="definition-list">${funnelDefinitions}</div>
+        </details>
+        <details open>
+          <summary>当前限制</summary>
+          <ul class="caveat-list">${caveats || "<li>暂无额外限制。</li>"}</ul>
+        </details>`;
+    }
+
+    function setLoading(isLoading) {
+      dashboardLoading = isLoading;
+      elements.refreshButton.disabled = isLoading;
+      elements.refreshButton.classList.toggle("loading", isLoading);
+      elements.queueButton.disabled = isLoading || pendingApplyTotal <= 0;
+      if (isLoading) {
+        elements.systemState.textContent = "正在读取本地数据";
+        elements.stateDot.className = "state-dot waiting";
+      }
+    }
+
+    function showError(message) {
+      elements.alert.textContent = message;
+      elements.alert.classList.remove("success");
+      elements.alert.classList.add("visible");
+      elements.systemState.textContent = "数据读取失败";
+      elements.stateDot.className = "state-dot error";
+    }
+
+    function showSuccess(message) {
+      elements.alert.textContent = message;
+      elements.alert.classList.add("visible", "success");
+      elements.systemState.textContent = "本地数据已更新";
+      elements.stateDot.className = "state-dot";
+      elements.alert.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    async function readApiResponse(response) {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+      return data;
+    }
+
+    async function postLocalJson(path, body) {
+      if (!actionToken) throw new Error("页面授权尚未准备好，请先刷新。");
+      const response = await fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Job-Agent-Token": actionToken
+        },
+        body: JSON.stringify(body)
+      });
+      return readApiResponse(response);
+    }
+
+    async function runWorkshopProject(jobId, includeEditorValues = false) {
+      const body = { confirmed: true };
+      if (includeEditorValues) {
+        body.config = {
+          project_name: $("projectName")?.value.trim() || "",
+          question: $("projectQuestion")?.value.trim() || "",
+          focus: $("projectFocus")?.value.trim() || "",
+          threshold: Number($("projectThreshold")?.value || 0)
+        };
+      }
+      const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/project-workshop/run`, body);
+      workspaceDetails.project_workshop = result.project_workshop;
+      renderPositionContent();
+      showSuccess(includeEditorValues
+        ? "你的修改已用合成数据重新跑通。现在打开演示页，看看结果能不能讲明白。"
+        : "安全项目已经生成并跑通。下一步只做一件事：改一个关键设置，再重新运行。");
+    }
+
+    async function verifyWorkshopProject(jobId) {
+      const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/project-workshop/verify`, {
+        confirmed: true,
+        explanation: $("projectExplanation")?.value || "",
+        demo_confirmed: Boolean($("projectDemoConfirmed")?.checked),
+        understanding_confirmed: Boolean($("projectUnderstandingConfirmed")?.checked)
+      });
+      workspaceDetails.project_workshop = result.project_workshop;
+      renderPositionContent();
+      showSuccess("项目已通过真实性准入，可以作为经历库候选；系统仍不会自动把它写进简历。");
+    }
+
+    async function createResumeDraft(jobId) {
+      if (!window.confirm(`为岗位 #${jobId} 生成一份只使用已确认事实的专属简历草稿？生成后仍需你本人打开 PDF 审阅。`)) return false;
+      const preview = window.open("about:blank", "_blank");
+      try {
+        const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/resume-draft`, { confirmed: true });
+        const pdfUrl = result.workspace?.resume_pdf_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`;
+        if (preview) preview.location.href = pdfUrl;
+        else window.open(pdfUrl, "_blank", "noopener");
+        await loadDashboard();
+        showSuccess(`岗位 #${jobId} 的简历草稿已生成。请检查 PDF；未经你批准，Agent 不会把它用于投递。`);
+        return true;
+      } catch (error) {
+        if (preview) preview.close();
+        showError(`简历草稿生成失败：${error?.message || error}`);
+        return false;
+      }
+    }
+
+    function openResumeDraft(jobId, resumeUrl = "") {
+      window.open(resumeUrl || `/resume-draft/${encodeURIComponent(jobId)}/pdf`, "_blank", "noopener");
+    }
+
+    async function approveResumeDraft(jobId) {
+      const statement = `确认你已打开岗位 #${jobId} 的 PDF，并检查了事实、联系方式、版面与分页？确认后会批准草稿或重建人工投递材料包。`;
+      if (!window.confirm(statement)) return false;
+      try {
+        await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/resume-draft/approve`, { confirmed_pdf_review: true });
+        await loadDashboard();
+        showSuccess(`岗位 #${jobId} 的简历已由你批准，可以打开岗位页并取得对应 PDF；网页内容与最终提交由你本人完成。`);
+        return true;
+      } catch (error) {
+        showError(`简历批准失败：${error?.message || error}`);
+        return false;
+      }
+    }
+
+    async function startManualApply(jobId) {
+      const statement = `将为岗位 #${jobId} 打开招聘页面，并在资源管理器中选中已批准的岗位专用 PDF。Agent 不会填写或上传任何网页字段；登录、作品集、筛选题与最终提交都由你本人完成。继续？`;
+      if (!window.confirm(statement)) return false;
+      try {
+        const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/assist`, { confirmed: true, launch: true });
+        const fileName = result.plan?.resume_file_name || "岗位专用简历.pdf";
+        showSuccess(`岗位 #${jobId} 的招聘页与简历文件夹正在打开。已选中：${fileName}。请本人登录、补充作品集和表单并完成上传。`);
+        return true;
+      } catch (error) {
+        showError(`投递页面打开失败：${error?.message || error}`);
+        return false;
+      }
+    }
+
+    let resumeEditorState = null;
+
+    async function openResumeEditor(jobId) {
+      try {
+        const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/resume-content`, { cache: "no-store" });
+        const payload = await readApiResponse(response);
+        resumeEditorState = {
+          jobId,
+          content: payload.content || {},
+          photoAvailable: Boolean(payload.photo_available)
+        };
+        renderEditorForm();
+        if (typeof elements.resumeEditorDialog.showModal === "function") elements.resumeEditorDialog.showModal();
+        else elements.resumeEditorDialog.setAttribute("open", "");
+      } catch (error) {
+        showError(`打开简历编辑器失败：${error?.message || error}`);
+        return false;
+      }
+    }
+
+    function renderEditorForm() {
+      const content = resumeEditorState.content;
+      const person = content.person || {};
+      elements.editorName.value = person.name || "";
+      elements.editorPhone.value = person.phone || "";
+      elements.editorEmail.value = person.email || "";
+      elements.editorCity.value = person.city || "";
+      elements.editorSummary.value = content.summary || "";
+      elements.editorSelfEvaluation.value = content.self_evaluation || "";
+      elements.editorTemplate.value = content.template_id || "mono-photo";
+      elements.editorSkills.value = (content.skills || []).join("、");
+      const hasPhoto = Boolean(person.photo_path);
+      elements.editorPhotoInclude.checked = hasPhoto;
+      elements.editorPhotoStatus.textContent = resumeEditorState.photoAvailable
+        ? `照片已保存（${hasPhoto ? "当前版面已嵌入" : "当前版面未嵌入"}）；重新上传会替换旧照片。`
+        : "尚未上传照片；上传并勾选后，保存时嵌入新版面。";
+      renderEditorSections();
+      renderEditorEducation();
+      elements.resumeEditorStatus.textContent = "";
+    }
+
+    function renderEditorSections() {
+      const sections = resumeEditorState.content.experience_sections || [];
+      elements.editorSections.innerHTML = sections.map((section, sectionIndex) => `
+        <div class="editor-section" data-section-index="${sectionIndex}">
+          <input class="editor-section-title" value="${escapeHtml(section.title || "")}" maxlength="80" placeholder="板块标题，如：实习经历" data-editor-field="section-title">
+          ${(section.entries || []).map((entry, entryIndex) => `
+            <div class="editor-entry" data-entry-index="${entryIndex}">
+              <div class="form-grid">
+                <div class="field"><label>机构 / 项目</label><input value="${escapeHtml(entry.organization || "")}" maxlength="80" data-editor-field="organization"></div>
+                <div class="field"><label>角色</label><input value="${escapeHtml(entry.role || "")}" maxlength="80" data-editor-field="role"></div>
+                <div class="field"><label>时间</label><input value="${escapeHtml(entry.dates || "")}" maxlength="80" data-editor-field="dates"></div>
+              </div>
+              ${(entry.bullets || []).map((bullet, bulletIndex) => `
+                <div class="editor-bullet" data-bullet-index="${bulletIndex}">
+                  <input class="editor-bullet-label" value="${escapeHtml(bullet.label || "")}" maxlength="16" placeholder="标签" data-editor-field="bullet-label">
+                  <textarea class="editor-bullet-text" rows="2" maxlength="300" placeholder="STAR 要点" data-editor-field="bullet-text">${escapeHtml(bullet.text || "")}</textarea>
+                  <button class="action-button compact secondary" type="button" data-editor-action="remove-bullet">删除要点</button>
+                </div>
+              `).join("")}
+              <div class="editor-entry-actions">
+                <button class="action-button compact secondary" type="button" data-editor-action="add-bullet">添加要点</button>
+                <button class="action-button compact secondary" type="button" data-editor-action="remove-entry">删除这段经历</button>
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `).join("");
+    }
+
+    function renderEditorEducation() {
+      const education = resumeEditorState.content.education || [];
+      elements.editorEducation.innerHTML = education.map((item, index) => `
+        <div class="editor-education-row" data-education-index="${index}">
+          <div class="form-grid">
+            <div class="field"><label>学校</label><input value="${escapeHtml(item.institution || "")}" maxlength="80" data-editor-field="institution"></div>
+            <div class="field"><label>专业</label><input value="${escapeHtml(item.major || "")}" maxlength="80" data-editor-field="major"></div>
+            <div class="field"><label>学位</label><input value="${escapeHtml(item.degree || "")}" maxlength="80" data-editor-field="degree"></div>
+            <div class="field"><label>毕业时间</label><input value="${escapeHtml(item.end || "")}" maxlength="80" data-editor-field="end"></div>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function syncEditorContent() {
+      const content = resumeEditorState.content;
+      const person = { ...(content.person || {}) };
+      person.name = elements.editorName.value.trim();
+      person.phone = elements.editorPhone.value.trim();
+      person.email = elements.editorEmail.value.trim();
+      person.city = elements.editorCity.value.trim();
+      person.photo_path = elements.editorPhotoInclude.checked ? String(person.photo_path || "") : "";
+      content.person = person;
+      content.template_id = elements.editorTemplate.value || content.template_id;
+      content.summary = elements.editorSummary.value.trim();
+      content.self_evaluation = elements.editorSelfEvaluation.value.trim();
+      content.skills = elements.editorSkills.value.split(/[、,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 12);
+
+      const sections = content.experience_sections || [];
+      [...elements.editorSections.querySelectorAll(".editor-section")].forEach((sectionEl) => {
+        const sectionIndex = Number(sectionEl.dataset.sectionIndex);
+        const section = sections[sectionIndex];
+        if (!section) return;
+        const titleInput = sectionEl.querySelector('[data-editor-field="section-title"]');
+        if (titleInput) section.title = titleInput.value.trim();
+        [...sectionEl.querySelectorAll(".editor-entry")].forEach((entryEl) => {
+          const entryIndex = Number(entryEl.dataset.entryIndex);
+          const entry = (section.entries || [])[entryIndex];
+          if (!entry) return;
+          const field = (name) => entryEl.querySelector(`[data-editor-field="${name}"]`);
+          const organization = field("organization");
+          const role = field("role");
+          const dates = field("dates");
+          if (organization) entry.organization = organization.value.trim();
+          if (role) entry.role = role.value.trim();
+          if (dates) entry.dates = dates.value.trim();
+          [...entryEl.querySelectorAll(".editor-bullet")].forEach((bulletEl) => {
+            const bulletIndex = Number(bulletEl.dataset.bulletIndex);
+            const bullet = (entry.bullets || [])[bulletIndex];
+            if (!bullet) return;
+            const label = bulletEl.querySelector('[data-editor-field="bullet-label"]');
+            const text = bulletEl.querySelector('[data-editor-field="bullet-text"]');
+            if (label) bullet.label = label.value.trim();
+            if (text) bullet.text = text.value.trim();
+          });
+        });
+      });
+
+      const education = content.education || [];
+      [...elements.editorEducation.querySelectorAll(".editor-education-row")].forEach((rowEl) => {
+        const index = Number(rowEl.dataset.educationIndex);
+        const item = education[index];
+        if (!item) return;
+        const field = (name) => rowEl.querySelector(`[data-editor-field="${name}"]`);
+        ["institution", "major", "degree", "end"].forEach((name) => {
+          const input = field(name);
+          if (input) item[name] = input.value.trim();
+        });
+      });
+    }
+
+    const copilotTime = (value) => {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+    };
+
+    function setCopilotBusy(busy, label = "") {
+      copilotBusy = busy;
+      elements.copilotSend.disabled = busy;
+      elements.copilotInput.disabled = busy;
+      elements.copilotSend.textContent = busy ? "处理中" : "发送";
+      if (label) elements.copilotProvider.textContent = label;
+    }
+
+    function renderCopilot(snapshot) {
+      copilotSnapshot = snapshot;
+      elements.copilotDialog.classList.toggle("show-history", copilotHistory);
+      const provider = snapshot?.provider || "local";
+      const model = snapshot?.model || "local-explainable-v1";
+      elements.copilotProvider.textContent = provider === "local" ? "本地规则 · 非云端模型" : `${provider} · ${model}`;
+      const allMessages = snapshot?.thread?.messages || [];
+      const messages = copilotHistory ? allMessages : allMessages.filter(message => message.job_id === selectedJobId);
+      $("historyCopilotButton").textContent = copilotHistory ? "返回当前" : "历史";
+      $("copilotScope").textContent = copilotHistory ? "全部历史 · 发送仍绑定当前职位" : (selectedJobId ? `#${selectedJobId} · ${currentJobs.find(job => job.job_id === selectedJobId)?.company || ""}` : "未选择职位");
+      if (!messages.length) {
+        elements.copilotMessages.innerHTML = `<div class="copilot-empty"><strong>这个职位，<br>从哪里开始？</strong><span>分析匹配、修改简历或准备面试。<br>执行前由你确认。</span></div>`;
+      } else {
+        elements.copilotMessages.innerHTML = messages.map((message) => {
+          const roleLabel = message.role === "user" ? "你" : "求职 Agent";
+          const msgProvider = String(message.provider || "");
+          const fallbackTag = (message.role !== "user" && (msgProvider === "local_fallback" || msgProvider === "local_quota_fallback"))
+            ? `<span class="copilot-fallback-tag">云端不可用 · 本地应答</span>`
+            : "";
+          const actions = (message.actions || []).map((action) => `<button class="copilot-action" type="button" data-copilot-kind="${escapeHtml(action.kind)}" data-job-id="${escapeHtml(action.job_id ?? "")}" data-instruction="${escapeHtml(action.instruction || "")}" data-requires-confirmation="${action.requires_confirmation ? "true" : "false"}">${escapeHtml(action.label)}</button>`).join("");
+          return `<article class="copilot-message ${message.role === "user" ? "user" : "assistant"}">
+            <div class="copilot-message-meta"><span>${escapeHtml(roleLabel)}${message.job_id ? ` · #${escapeHtml(message.job_id)}` : ""}${fallbackTag}</span><span>${escapeHtml(copilotTime(message.created_at))}</span></div>
+            <div class="copilot-message-content">${escapeHtml(message.content).replaceAll("\n", "<br>")}</div>
+            ${actions ? `<div class="copilot-actions">${actions}</div>` : ""}
+          </article>`;
+        }).join("");
+      }
+      elements.copilotSuggestions.innerHTML = (selectedJobId ? ["为什么匹配？", "准备简历草稿", "面试该准备什么？"] : (snapshot?.suggestions || [])).map((suggestion) => `<button class="copilot-suggestion" type="button" data-copilot-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`).join("");
+      requestAnimationFrame(() => { elements.copilotMessages.scrollTop = elements.copilotMessages.scrollHeight; });
+    }
+
+    async function loadCopilot() {
+      setCopilotBusy(true, "正在读取本地求职上下文…");
+      try {
+        const response = await fetch("/api/copilot", { cache: "no-store" });
+        const snapshot = await readApiResponse(response);
+        renderCopilot(snapshot);
+      } finally {
+        setCopilotBusy(false);
+      }
+    }
+
+    async function openCopilot(message = "") {
+      showWorkspace();
+      $("jobWorkspace").classList.add("agent-visible", "detail-visible");
+      $("jobWorkspace").classList.remove("agent-hidden");
+      elements.openCopilotButton.setAttribute("aria-expanded", "true");
+      try {
+        if (!copilotSnapshot && !copilotBusy) await loadCopilot();
+      } catch (error) {
+        showError(`Agent 对话读取失败：${error?.message || error}`);
+      }
+      if (message) elements.copilotInput.value = message;
+      elements.copilotInput.focus();
+    }
+
+    async function askAgentToReviseResume(jobId) {
+      if (Number(jobId) !== selectedJobId) focusJob(jobId);
+      await openCopilot(`请根据 #${jobId} 的完整 JD 直接修改现有简历：按参考模板排版，使用 STAR 法则突出最相关的真实经历，保留所有原始数字，不显示匹配评分，并生成新的 DOCX/PDF。`);
+    }
+
+    async function sendCopilotMessage(message) {
+      const cleaned = String(message || "").trim();
+      if (!cleaned || copilotBusy) return;
+      const messageJobId = selectedJobId;
+      setCopilotBusy(true, "Agent 正在核对岗位与进度…");
+      try {
+        const result = await postLocalJson("/api/copilot/message", { message: cleaned, job_id: messageJobId });
+        renderCopilot(result.copilot);
+        composerDrafts.delete(String(messageJobId));
+        if (selectedJobId === messageJobId) elements.copilotInput.value = "";
+      } catch (error) {
+        showError(`Agent 对话失败：${error?.message || error}`);
+      } finally {
+        setCopilotBusy(false);
+        elements.copilotInput.focus();
+      }
+    }
+
+    function focusJob(jobId) {
+      if (!currentJobs.some(job => String(job.job_id) === String(jobId))) return;
+      showWorkspace();
+      $("jobWorkspace").classList.remove("agent-visible");
+      syncAgentExpanded();
+      $("jobSearch").value = "";
+      jobFilter = "all";
+      jobTrack = "all";
+      renderJobs(currentJobs);
+      selectJob(jobId);
+      $("jobDetail").querySelector("h2")?.focus({preventScroll: true});
+    }
+
+    async function runCopilotAction(kind, jobId, instruction = "") {
+      if (kind === "review_queue") elements.queueButton.click();
+      else if (kind === "open_job") focusJob(jobId);
+      else if (kind === "open_preparation") {
+        const detail = await readApiResponse(await fetch(`/api/jobs/${encodeURIComponent(jobId)}/detail`, {cache: "no-store"}));
+        if (!detail.preparation_url) throw new Error("这个职位还没有已生成的准备包。可先在对话中讨论面试问题；已有准备包保留在“进度与资料”。");
+        window.open(detail.preparation_url, "_blank", "noopener");
+      }
+      else if (kind === "open_profile") elements.openProfileButton.click();
+      else if (kind === "open_settings") elements.openSettingsButton.click();
+      else if (kind === "create_resume_draft") await createResumeDraft(jobId);
+      else if (kind === "revise_resume") {
+        const cleaned = String(instruction || "").trim();
+        if (!cleaned) throw new Error("这条 Agent 动作缺少修改要求，请重新发送消息。");
+        if (!window.confirm(`让 Agent 按 JD 与 STAR 法则直接修改岗位 #${jobId} 的简历？\n\n修改要求：${cleaned}\n\n新版仍需你打开 PDF 审阅后才能用于投递。`)) return;
+        const preview = window.open("about:blank", "_blank");
+        try {
+          const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/resume-content/revise`, {
+            confirmed: true,
+            instruction: cleaned
+          });
+          if (preview) preview.location.href = result.resume_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`;
+          else window.open(result.resume_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`, "_blank", "noopener");
+          await loadDashboard();
+          showSuccess(`岗位 #${jobId} 已由 Agent 直接生成新版简历（${result.change_count || 0} 处调整）。请核对 PDF；确认前不会进入可投递状态。`);
+        } catch (error) {
+          if (preview) preview.close();
+          showError(`Agent 修改简历失败：${error?.message || error}`);
+        }
+      }
+      else if (kind === "approve_resume_draft") await approveResumeDraft(jobId);
+      else if (kind === "start_safe_fill") await startManualApply(jobId);
+    }
+
+    async function recordStatus(jobId, status, detail) {
+      if (!actionToken) throw new Error("页面授权尚未准备好，请先刷新。 ");
+      const response = await fetch(`/api/applications/${encodeURIComponent(jobId)}/status`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Job-Agent-Token": actionToken
+        },
+        body: JSON.stringify({ status, detail, confirmed: true })
+      });
+      return readApiResponse(response);
+    }
+
+    async function recordCommute(jobId, minutes, method, note) {
+      if (!actionToken) throw new Error("页面授权尚未准备好，请先刷新。");
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/commute`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Job-Agent-Token": actionToken
+        },
+        body: JSON.stringify({ minutes, method, note, confirmed: true })
+      });
+      return readApiResponse(response);
+    }
+
+    async function calculateRoute(jobId, destination, mode) {
+      if (!actionToken) throw new Error("页面授权尚未准备好，请先刷新。");
+      const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/commute/route`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Job-Agent-Token": actionToken
+        },
+        body: JSON.stringify({ destination, mode, confirmed: true })
+      });
+      return readApiResponse(response);
+    }
+
+    function renderRouteResult(route) {
+      const modeLabels = { transit: "公交 / 地铁", driving: "驾车", walking: "步行", bicycling: "骑行" };
+      const options = Array.isArray(route?.options) ? route.options : [];
+      elements.routeResult.innerHTML = `
+        <div><strong>${escapeHtml(route.origin_resolved || route.origin_query)} → ${escapeHtml(route.destination_resolved || route.destination_query)}</strong></div>
+        <div class="usage-line">${escapeHtml(modeLabels[route.mode] || route.mode)} · 最快方案已保存并参与岗位排序</div>
+        <div class="route-options">${options.map((option) => {
+          const distance = option.distance_meters ? `${(Number(option.distance_meters) / 1000).toFixed(1)} 公里` : "距离未返回";
+          const walk = option.walking_meters ? ` · 步行 ${option.walking_meters} 米` : "";
+          const transfer = option.transfers !== null && option.transfers !== undefined ? ` · 换乘 ${option.transfers} 次` : "";
+          return `<div class="route-option"><strong>${escapeHtml(option.minutes)} 分钟</strong><span>方案 ${escapeHtml(option.rank)} · ${escapeHtml(distance)}${escapeHtml(walk)}${escapeHtml(transfer)}<br>${escapeHtml(option.summary)}</span></div>`;
+        }).join("")}</div>`;
+      elements.routeResult.classList.add("visible");
+    }
+
+    function prefillPreferencesForm() {
+      if (!activeProfile) return;
+      elements.preferenceTargetRoles.value = joinValues(activeProfile.target_roles);
+      elements.preferenceAdjacentRoles.value = joinValues(activeProfile.adjacent_roles);
+      elements.preferenceIndustries.value = joinValues(activeProfile.target_industries);
+      elements.preferenceLocations.value = joinValues(activeProfile.preferred_locations);
+      elements.preferenceEmploymentTypes.value = joinValues(activeProfile.employment_types);
+      elements.preferenceMustHaves.value = joinValues(activeProfile.must_haves);
+      elements.preferenceAvoid.value = joinValues(activeProfile.avoid);
+      elements.preferenceCommuteOrigin.value = activeProfile.commute_origin || "";
+      elements.preferenceMaxCommute.value = activeProfile.max_one_way_minutes || "";
+      elements.preferenceTransportModes.value = joinValues(activeProfile.transport_modes);
+      elements.preferenceRemote.checked = Boolean(activeProfile.remote_acceptable);
+      elements.preferenceDailyPayFloor.value = activeProfile.internship_daily_pay_floor ?? "";
+      elements.preferenceExcludeOutsourcing.checked = Boolean(activeProfile.exclude_outsourcing);
+    }
+
+    async function loadDashboard() {
+      setLoading(true);
+      elements.alert.classList.remove("visible");
+      try {
+        const response = await fetch("/api/dashboard", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`);
+
+        actionToken = data.action_token || "";
+        try {
+          await loadConnectorSettings();
+        } catch (settingsError) {
+          elements.connectorSummaryDot.classList.remove("ready");
+          elements.connectorSummaryText.textContent = "API 设置不可读";
+        }
+        renderProfile(data.active_profile || null);
+        renderStrategyPlan(data.strategy || null);
+        renderMetrics(data.metrics || []);
+        renderFunnel(data.funnel || []);
+        renderTrackedJobs(data.tracked_jobs || []);
+        renderJobs(data.tracked_jobs || []);
+        const selected = currentJobs.find(job => job.job_id === selectedJobId);
+        if (selected) {
+          const scrollTop = $("jobDetail").querySelector(".detail-scroll")?.scrollTop || 0;
+          renderJobDetail(selected);
+          $("jobDetail").querySelector(".detail-scroll").scrollTop = scrollTop;
+          loadJobDetail(selected);
+        }
+        renderCandidateBreakdown(data.candidate_breakdown || []);
+        renderPreparation(data.priority_preparation || []);
+        renderFeedback(data.recent_feedback || []);
+        renderMethodology(data);
+
+        elements.freshnessMain.textContent = relativeFreshness(data.source_freshness_at);
+        elements.freshnessSub.textContent = `${data.source_name || "本地 SQLite"} · 页面 ${formatDateTime(data.generated_at)} 刷新`;
+        elements.systemState.textContent = "本地数据已连接";
+        elements.stateDot.className = "state-dot";
+      } catch (error) {
+        showError(`暂时无法读取求职数据。请保留启动窗口并重试。${error?.message ? `（${error.message}）` : ""}`);
+      } finally {
+        setLoading(false);
+        if (!elements.alert.classList.contains("visible")) {
+          elements.systemState.textContent = "本地数据已连接";
+          elements.stateDot.className = "state-dot";
+        }
+      }
+    }
+
+    $("workspaceNav").addEventListener("click", () => showWorkspace());
+    $("overviewNav").addEventListener("click", () => showWorkspace(true));
+    $("jobSearch").addEventListener("input", () => renderJobs(currentJobs));
+    document.querySelector(".track-switch").addEventListener("click", event => {
+      const button = event.target.closest("[data-job-track]");
+      if (!button) return;
+      jobTrack = button.dataset.jobTrack;
+      renderJobs(currentJobs);
+    });
+    document.querySelector(".track-plan").addEventListener("click", event => {
+      const button = event.target.closest("[data-job-track]");
+      if (!button) return;
+      jobTrack = button.dataset.jobTrack;
+      renderJobs(currentJobs);
+    });
+    document.querySelector(".job-filters").addEventListener("click", event => {
+      const button = event.target.closest("[data-job-filter]");
+      if (!button) return;
+      jobFilter = button.dataset.jobFilter;
+      renderJobs(currentJobs);
+    });
+    elements.jobs.addEventListener("click", event => {
+      const choice = event.target.closest("[data-select-job]");
+      if (choice) selectJob(choice.dataset.selectJob);
+      if (event.target.closest("[data-clear-search]")) {
+        $("jobSearch").value = "";
+        jobFilter = "all";
+        renderJobs(currentJobs);
+        $("jobSearch").focus();
+      }
+    });
+    $("jobDetail").addEventListener("click", async event => {
+      const tab = event.target.closest("[data-detail-tab]");
+      if (tab) {
+        detailTab = tab.dataset.detailTab;
+        renderPositionContent();
+        return;
+      }
+      const button = event.target.closest("[data-detail-action]");
+      if (!button || button.disabled) return;
+      const action = button.dataset.detailAction;
+      const jobId = selectedJobId;
+      if (action === "back") {
+        $("jobWorkspace").classList.remove("detail-visible");
+        document.querySelector('[data-select-job][aria-current="true"]')?.focus();
+        return;
+      }
+      if (action === "status" || action === "commute") {
+        showWorkspace(true);
+        elements.statusJob.value = String(jobId);
+        elements.commuteJob.value = String(jobId);
+        elements.routeJob.value = String(jobId);
+        elements.statusConfirmed.checked = false;
+        elements.routeConfirmed.checked = false;
+        elements.commuteConfirmed.checked = false;
+        prefillCommuteForJob();
+        prefillRouteForJob();
+        const utility = document.querySelector(action === "status" ? ".area-status" : ".area-commute");
+        utility.open = true;
+        utility.scrollIntoView({block: "start"});
+        utility.querySelector("select").focus();
+        return;
+      }
+      if (action === "open-resume") return openResumeDraft(jobId);
+      if (action === "ask-agent-resume") return askAgentToReviseResume(jobId);
+      if (action === "interview") return openCopilot("这个职位面试该准备什么？");
+      if (action === "retry") return loadJobDetail(currentJobs.find(job => job.job_id === jobId));
+      button.disabled = true;
+      try {
+        if (action === "create-resume") await createResumeDraft(jobId);
+        if (action === "approve-resume") await approveResumeDraft(jobId);
+        if (action === "manual-apply") await startManualApply(jobId);
+        if (action === "edit-resume") await openResumeEditor(jobId);
+        if (action === "run-project") await runWorkshopProject(jobId, false);
+        if (action === "rerun-project") await runWorkshopProject(jobId, true);
+        if (action === "verify-project") await verifyWorkshopProject(jobId);
+      } catch (error) {
+        showError(`操作没有完成：${error?.message || error}`);
+      } finally {
+        if (button.isConnected) button.disabled = false;
+      }
+    });
+
+    elements.preparation.addEventListener("click", async (event) => {
+      const button = event.target.closest('[data-action="ask-agent-resume"]');
+      if (!button) return;
+      await askAgentToReviseResume(button.dataset.jobId);
+    });
+
+    elements.resumeEditorCloseButton.addEventListener("click", () => elements.resumeEditorDialog.close());
+    elements.resumeEditorCancel.addEventListener("click", () => elements.resumeEditorDialog.close());
+
+    elements.editorPhotoUpload.addEventListener("click", async () => {
+      const file = elements.editorPhotoFile.files && elements.editorPhotoFile.files[0];
+      if (!file) {
+        elements.resumeEditorStatus.textContent = "请先选择一张 JPG 或 PNG 照片。";
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        elements.resumeEditorStatus.textContent = "照片超过 5MB，请先压缩。";
+        return;
+      }
+      elements.editorPhotoUpload.disabled = true;
+      elements.resumeEditorStatus.textContent = "正在上传照片…";
+      try {
+        const response = await fetch("/api/profile/photo", {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "image/png",
+            "X-Job-Agent-Token": actionToken
+          },
+          body: await file.arrayBuffer()
+        });
+        const data = await readApiResponse(response);
+        syncEditorContent();
+        resumeEditorState.content.person.photo_path = data.photo_path || "";
+        resumeEditorState.photoAvailable = true;
+        renderEditorForm();
+        elements.resumeEditorStatus.textContent = "照片已上传；保存并重新渲染后生效。";
+      } catch (error) {
+        elements.resumeEditorStatus.textContent = `照片上传失败：${error?.message || error}`;
+      } finally {
+        elements.editorPhotoUpload.disabled = false;
+      }
+    });
+
+    elements.editorSections.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-editor-action]");
+      if (!button || !resumeEditorState) return;
+      syncEditorContent();
+      const sectionEl = button.closest(".editor-section");
+      const entryEl = button.closest(".editor-entry");
+      const section = (resumeEditorState.content.experience_sections || [])[Number(sectionEl.dataset.sectionIndex)];
+      if (!section) return;
+      const action = button.dataset.editorAction;
+      if (action === "add-bullet") {
+        const entry = (section.entries || [])[Number(entryEl.dataset.entryIndex)];
+        if (!entry || (entry.bullets || []).length >= 4) {
+          elements.resumeEditorStatus.textContent = "每段经历最多 4 条要点。";
+          return;
+        }
+        entry.bullets.push({ label: "", text: "" });
+      } else if (action === "remove-bullet") {
+        const entry = (section.entries || [])[Number(entryEl.dataset.entryIndex)];
+        if (!entry || (entry.bullets || []).length <= 1) {
+          elements.resumeEditorStatus.textContent = "每段经历至少保留一条要点。";
+          return;
+        }
+        entry.bullets.splice(Number(button.closest(".editor-bullet").dataset.bulletIndex), 1);
+      } else if (action === "remove-entry") {
+        if ((section.entries || []).length <= 1) {
+          elements.resumeEditorStatus.textContent = "每个板块至少保留一段经历。";
+          return;
+        }
+        section.entries.splice(Number(entryEl.dataset.entryIndex), 1);
+      }
+      renderEditorSections();
+    });
+
+    elements.editorAddEntry.addEventListener("click", () => {
+      if (!resumeEditorState) return;
+      syncEditorContent();
+      const sections = resumeEditorState.content.experience_sections || (resumeEditorState.content.experience_sections = []);
+      if (!sections.length) sections.push({ title: "经历", entries: [] });
+      const target = sections[0];
+      if ((target.entries || []).length >= 4) {
+        elements.resumeEditorStatus.textContent = "每个板块最多 4 段经历。";
+        return;
+      }
+      target.entries.push({ organization: "新经历", role: "", dates: "", bullets: [{ label: "", text: "" }] });
+      renderEditorSections();
+    });
+
+    elements.editorPolish.addEventListener("click", async () => {
+      if (!resumeEditorState) return;
+      syncEditorContent();
+      elements.editorPolish.disabled = true;
+      elements.resumeEditorStatus.textContent = "正在按 JD 生成润色建议…";
+      try {
+        const jobId = resumeEditorState.jobId;
+        const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/resume-content/polish`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Job-Agent-Token": actionToken },
+          body: JSON.stringify({ confirmed: true, content: resumeEditorState.content })
+        });
+        const data = await readApiResponse(response);
+        resumeEditorState.content = data.content || resumeEditorState.content;
+        renderEditorForm();
+        const count = Number(data.change_count || 0);
+        if (data.engine === "local_fallback") {
+          elements.resumeEditorStatus.textContent = `${data.warning || "云端 AI 本次不可用。"} 已自动改用本地基础润色${count ? `，生成 ${count} 处建议` : "，当前没有安全的修改建议"}；未消耗 AI 额度。`;
+        } else if (data.engine === "local") {
+          elements.resumeEditorStatus.textContent = count
+            ? `本地规则已按 JD 整理 ${count} 处；请检查后保存。`
+            : "本地规则未发现需要安全调整的内容。";
+        } else {
+          elements.resumeEditorStatus.textContent = count
+            ? `AI 已按 JD 润色 ${count} 处（含自我评价）；请检查后保存。`
+            : "AI 认为当前措辞已贴合 JD，未产生修改建议。";
+        }
+      } catch (error) {
+        elements.resumeEditorStatus.textContent = `润色失败：${error?.message || error}`;
+      } finally {
+        elements.editorPolish.disabled = false;
+      }
+    });
+
+    elements.editorImport.addEventListener("click", async () => {
+      if (!resumeEditorState) return;
+      const resumeText = (elements.editorImportText.value || "").trim();
+      if (!resumeText) {
+        elements.resumeEditorStatus.textContent = "请先把原简历文本粘贴到导入框中。";
+        elements.editorImportText.focus();
+        return;
+      }
+      if (!window.confirm("导入会用 AI 解析的原简历内容替换当前表单（岗位信息与照片保留）。解析结果只是建议，保存前请逐项检查。继续吗？")) {
+        return;
+      }
+      syncEditorContent();
+      elements.editorImport.disabled = true;
+      elements.resumeEditorStatus.textContent = "正在解析原简历…";
+      try {
+        const jobId = resumeEditorState.jobId;
+        const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/resume-content/import`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Job-Agent-Token": actionToken },
+          body: JSON.stringify({ resume_text: resumeText })
+        });
+        const data = await readApiResponse(response);
+        resumeEditorState.content = data.content || resumeEditorState.content;
+        renderEditorForm();
+        const warnings = (data.warnings || []).length
+          ? `注意：${data.warnings.join("；")}。`
+          : "";
+        elements.resumeEditorStatus.textContent =
+          `已把原简历解析为表单内容；请逐项检查姓名、联系方式与量化数字后再保存。${warnings}`;
+      } catch (error) {
+        elements.resumeEditorStatus.textContent = `导入失败：${error?.message || error}`;
+      } finally {
+        elements.editorImport.disabled = false;
+      }
+    });
+
+    elements.resumeEditorForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!resumeEditorState) return;
+      syncEditorContent();
+      elements.resumeEditorSubmit.disabled = true;
+      elements.resumeEditorStatus.textContent = "正在重新渲染简历…";
+      try {
+        const jobId = resumeEditorState.jobId;
+        await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/resume-content`, {
+          confirmed: true,
+          content: resumeEditorState.content
+        });
+        elements.resumeEditorDialog.close();
+        await loadDashboard();
+        showSuccess(`岗位 #${jobId} 的简历已按你的修改重新渲染；请打开 PDF 复查后再批准。`);
+        window.open(`/resume-draft/${encodeURIComponent(jobId)}/pdf`, "_blank", "noopener");
+      } catch (error) {
+        elements.resumeEditorStatus.textContent = `保存失败：${error?.message || error}`;
+      } finally {
+        elements.resumeEditorSubmit.disabled = false;
+      }
+    });
+
+    elements.statusForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!elements.statusForm.reportValidity()) return;
+      const jobId = elements.statusJob.value;
+      const status = elements.statusValue.value;
+      elements.statusSubmit.disabled = true;
+      try {
+        await recordStatus(jobId, status, elements.statusDetail.value.trim());
+        elements.statusDetail.value = "";
+        elements.statusConfirmed.checked = false;
+        await loadDashboard();
+        showSuccess(`岗位 #${jobId} 已更新为“${statusLabels[status] || status}”。`);
+      } catch (error) {
+        showError(`状态记录失败：${error?.message || error}`);
+      } finally {
+        elements.statusSubmit.disabled = false;
+      }
+    });
+
+    elements.commuteJob.addEventListener("change", prefillCommuteForJob);
+    elements.routeJob.addEventListener("change", prefillRouteForJob);
+    elements.routeForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!elements.routeForm.reportValidity()) return;
+      const jobId = elements.routeJob.value;
+      elements.routeSubmit.disabled = true;
+      elements.routeSubmit.textContent = "正在计算…";
+      try {
+        const result = await calculateRoute(
+          jobId,
+          elements.commuteDestination.value.trim(),
+          elements.routeMode.value
+        );
+        renderRouteResult(result.route);
+        elements.routeConfirmed.checked = false;
+        await loadDashboard();
+        renderRouteResult(result.route);
+        showSuccess(`岗位 #${jobId} 的最佳通勤路线已保存，并已参与今日岗位排序。`);
+      } catch (error) {
+        showError(`路线计算失败：${error?.message || error}`);
+      } finally {
+        elements.routeSubmit.disabled = false;
+        elements.routeSubmit.textContent = "计算并保存";
+      }
+    });
+    elements.commuteMethod.addEventListener("change", updateCommuteMethodInput);
+    elements.commuteForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!elements.commuteForm.reportValidity()) return;
+      const jobId = elements.commuteJob.value;
+      const minutes = elements.commuteMethod.value === "unknown"
+        ? null
+        : Number(elements.commuteMinutes.value);
+      elements.commuteSubmit.disabled = true;
+      try {
+        await recordCommute(
+          jobId,
+          minutes,
+          elements.commuteMethod.value,
+          elements.commuteNote.value.trim()
+        );
+        elements.commuteConfirmed.checked = false;
+        await loadDashboard();
+        const maximum = activeProfile?.max_one_way_minutes;
+        if (minutes === null) {
+          showSuccess(`岗位 #${jobId} 的通勤记录已清除，恢复为“待估算”，不会被自动排除。`);
+        } else {
+          const result = maximum && minutes > maximum
+            ? `，超过你的 ${maximum} 分钟上限，已从今日待投列表移出`
+            : "，已参与今日岗位筛选";
+          showSuccess(`岗位 #${jobId} 的单程通勤已记录为 ${minutes} 分钟${result}。`);
+        }
+      } catch (error) {
+        showError(`通勤记录失败：${error?.message || error}`);
+      } finally {
+        elements.commuteSubmit.disabled = false;
+      }
+    });
+
+    elements.openCopilotButton.addEventListener("click", () => openCopilot());
+    elements.closeCopilotButton.addEventListener("click", () => {
+      $("jobWorkspace").classList.remove("agent-visible");
+      $("jobWorkspace").classList.add("agent-hidden");
+      elements.openCopilotButton.setAttribute("aria-expanded", "false");
+      elements.openCopilotButton.focus();
+    });
+    $("historyCopilotButton").addEventListener("click", () => {
+      copilotHistory = !copilotHistory;
+      if (copilotSnapshot) renderCopilot(copilotSnapshot);
+    });
+    elements.resetCopilotButton.addEventListener("click", async () => {
+      if (!window.confirm("开始一段新对话？当前对话会从工作栏中清空。")) return;
+      setCopilotBusy(true, "正在开始新对话…");
+      try {
+        const result = await postLocalJson("/api/copilot/reset", {});
+        renderCopilot(result.copilot);
+      } catch (error) {
+        showError(`新对话创建失败：${error?.message || error}`);
+      } finally {
+        setCopilotBusy(false);
+        elements.copilotInput.focus();
+      }
+    });
+    elements.copilotForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await sendCopilotMessage(elements.copilotInput.value);
+    });
+    elements.copilotInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        elements.copilotForm.requestSubmit();
+      }
+    });
+    elements.copilotSuggestions.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-copilot-suggestion]");
+      if (button) sendCopilotMessage(button.dataset.copilotSuggestion || "");
+    });
+    elements.copilotMessages.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-copilot-kind]");
+      if (!button) return;
+      button.disabled = true;
+      try {
+        await runCopilotAction(button.dataset.copilotKind, button.dataset.jobId || "", button.dataset.instruction || "");
+      } catch (error) {
+        showError(`Agent 动作执行失败：${error?.message || error}`);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    elements.openSettingsButton.addEventListener("click", async () => {
+      try {
+        await loadConnectorSettings();
+      } catch (error) {
+        showError(`API 设置读取失败：${error?.message || error}`);
+        return;
+      }
+      if (typeof elements.settingsDialog.showModal === "function") elements.settingsDialog.showModal();
+      else elements.settingsDialog.setAttribute("open", "");
+    });
+    const closeSettingsDialog = () => elements.settingsDialog.close();
+    elements.closeSettingsButton.addEventListener("click", closeSettingsDialog);
+    elements.cancelSettingsButton.addEventListener("click", closeSettingsDialog);
+    elements.aiProvider.addEventListener("change", () => {
+      if (elements.aiProvider.value === "openai" && !elements.aiModel.value) {
+        elements.aiModel.value = "gpt-5.6-luna";
+      }
+      syncConnectorFields();
+    });
+    elements.searchProvider.addEventListener("change", syncConnectorFields);
+    elements.mapProvider.addEventListener("change", syncConnectorFields);
+    elements.settingsForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      syncConnectorFields();
+      if (!elements.settingsForm.reportValidity()) return;
+      if (!actionToken) {
+        showError("页面授权尚未准备好，请刷新后重试。");
+        return;
+      }
+      elements.settingsSubmit.disabled = true;
+      try {
+        const aiProvider = elements.aiProvider.value;
+        const response = await fetch("/api/settings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Job-Agent-Token": actionToken
+          },
+          body: JSON.stringify({
+            ai_provider: aiProvider,
+            ai_model: aiProvider === "local" ? "local-explainable-v1" : elements.aiModel.value.trim(),
+            ai_base_url: aiProvider === "openai_compatible" ? elements.aiBaseUrl.value.trim() : null,
+            ai_api_key: aiProvider === "local" ? "" : elements.aiApiKey.value.trim(),
+            clear_ai_api_key: elements.clearAiApiKey.checked,
+            ai_monthly_quota: optionalPositiveInteger(elements.aiMonthlyQuota),
+            search_provider: elements.searchProvider.value,
+            search_api_key: elements.searchProvider.value === "none" ? "" : elements.searchApiKey.value.trim(),
+            clear_search_api_key: elements.clearSearchApiKey.checked,
+            search_monthly_quota: optionalPositiveInteger(elements.searchMonthlyQuota),
+            map_provider: elements.mapProvider.value,
+            map_api_key: elements.mapProvider.value === "none" ? "" : elements.mapApiKey.value.trim(),
+            clear_map_api_key: elements.clearMapApiKey.checked,
+            map_monthly_quota: optionalPositiveInteger(elements.mapMonthlyQuota)
+          })
+        });
+        const result = await readApiResponse(response);
+        renderConnectorSettings(result.settings);
+        closeSettingsDialog();
+        showSuccess("连接和额度设置已保存在本机。新的搜索、AI 分析与通勤路线会使用这套配置。");
+      } catch (error) {
+        showError(`API 设置保存失败：${error?.message || error}`);
+      } finally {
+        elements.settingsSubmit.disabled = false;
+      }
+    });
+
+    elements.openProfileButton.addEventListener("click", () => {
+      prefillProfileForm();
+      if (typeof elements.profileDialog.showModal === "function") elements.profileDialog.showModal();
+      else elements.profileDialog.setAttribute("open", "");
+    });
+
+    elements.openPreferencesButton.addEventListener("click", () => {
+      if (!activeProfile) return;
+      prefillPreferencesForm();
+      if (typeof elements.preferencesDialog.showModal === "function") elements.preferencesDialog.showModal();
+      else elements.preferencesDialog.setAttribute("open", "");
+    });
+    const closePreferencesDialog = () => elements.preferencesDialog.close();
+    elements.closePreferencesButton.addEventListener("click", closePreferencesDialog);
+    elements.cancelPreferencesButton.addEventListener("click", closePreferencesDialog);
+    elements.preferencesForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!elements.preferencesForm.reportValidity()) return;
+      elements.preferencesSubmit.disabled = true;
+      try {
+        const maximum = String(elements.preferenceMaxCommute.value || "").trim();
+        const dailyPayFloor = String(elements.preferenceDailyPayFloor.value || "").trim();
+        const response = await fetch("/api/profile/preferences", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Job-Agent-Token": actionToken
+          },
+          body: JSON.stringify({
+            target_roles: splitValues(elements.preferenceTargetRoles.value),
+            adjacent_roles: splitValues(elements.preferenceAdjacentRoles.value),
+            target_industries: splitValues(elements.preferenceIndustries.value),
+            preferred_locations: splitValues(elements.preferenceLocations.value),
+            employment_types: splitValues(elements.preferenceEmploymentTypes.value),
+            must_haves: splitValues(elements.preferenceMustHaves.value),
+            avoid: splitValues(elements.preferenceAvoid.value),
+            commute_origin: elements.preferenceCommuteOrigin.value.trim(),
+            max_one_way_minutes: maximum ? Number(maximum) : null,
+            transport_modes: splitValues(elements.preferenceTransportModes.value),
+            remote_acceptable: elements.preferenceRemote.checked,
+            internship_daily_pay_floor: dailyPayFloor ? Number(dailyPayFloor) : null,
+            exclude_outsourcing: elements.preferenceExcludeOutsourcing.checked
+          })
+        });
+        await readApiResponse(response);
+        closePreferencesDialog();
+        await loadDashboard();
+        showSuccess("求职方向与通勤边界已更新，岗位列表已按新的条件重新排序。");
+      } catch (error) {
+        showError(`求职偏好保存失败：${error?.message || error}`);
+      } finally {
+        elements.preferencesSubmit.disabled = false;
+      }
+    });
+    const closeProfileDialog = () => elements.profileDialog.close();
+    elements.closeProfileButton.addEventListener("click", closeProfileDialog);
+    elements.cancelProfileButton.addEventListener("click", closeProfileDialog);
+    elements.profileMode.addEventListener("change", () => {
+      const replacing = elements.profileMode.value === "replace";
+      elements.replaceConfirm.classList.toggle("visible", replacing);
+      const checkbox = elements.replaceConfirm.querySelector('input[name="confirm_replace"]');
+      checkbox.required = replacing;
+      if (!replacing) checkbox.checked = false;
+      document.getElementById("targetRoles").required = replacing;
+      syncProfileRequirements();
+    });
+    elements.resumeFile.addEventListener("change", syncProfileRequirements);
+    elements.profilePhotoUpload.addEventListener("click", async () => {
+      const file = elements.profilePhotoFile.files && elements.profilePhotoFile.files[0];
+      if (!file) {
+        elements.profilePhotoStatus.textContent = "请先选择一张 JPG 或 PNG 证件照。";
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        elements.profilePhotoStatus.textContent = "照片超过 5MB，请先压缩。";
+        return;
+      }
+      elements.profilePhotoUpload.disabled = true;
+      elements.profilePhotoStatus.textContent = "正在保存到本机私有目录…";
+      try {
+        const response = await fetch("/api/profile/photo", {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "image/png",
+            "X-Job-Agent-Token": actionToken
+          },
+          body: await file.arrayBuffer()
+        });
+        await readApiResponse(response);
+        elements.profilePhotoStatus.textContent = "证件照已保存。之后生成或通过 Agent 修改简历时会自动嵌入。";
+      } catch (error) {
+        elements.profilePhotoStatus.textContent = `证件照上传失败：${error?.message || error}`;
+      } finally {
+        elements.profilePhotoUpload.disabled = false;
+      }
+    });
+    elements.profileForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      syncProfileRequirements();
+      if (!elements.profileForm.reportValidity()) return;
+      elements.profileSubmit.disabled = true;
+      try {
+        const response = await fetch("/api/profile/onboard", {
+          method: "POST",
+          headers: { "X-Job-Agent-Token": actionToken },
+          body: new FormData(elements.profileForm)
+        });
+        const result = await readApiResponse(response);
+        closeProfileDialog();
+        await loadDashboard();
+        const switchNote = result.replaced_profile ? "已备份上一位用户并切换到新的空白岗位库。" : "已更新当前用户资料。";
+        const warning = (result.warnings || []).length ? ` 提醒：${result.warnings.join("；")}` : "";
+        const resumeNote = result.resume_filename
+          ? `已读取 ${result.extracted_characters} 个简历字符，导入 ${result.imported_facts} 条原文事实和 ${result.imported_skills} 项基础技能。`
+          : "未重复上传简历，原有经历库保持不变。";
+        showSuccess(`${switchNote} ${resumeNote}${warning}`);
+      } catch (error) {
+        showError(`简历与资料保存失败：${error?.message || error}`);
+      } finally {
+        elements.profileSubmit.disabled = false;
+      }
+    });
+
+    elements.queueButton.addEventListener("click", () => {
+      showWorkspace();
+      jobFilter = "pending";
+      jobTrack = "all";
+      $("jobSearch").value = "";
+      renderJobs(currentJobs);
+      $("jobWorkspace").classList.remove("detail-visible");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      elements.jobsTitle.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "start" });
+      elements.jobsTitle.focus({ preventScroll: true });
+    });
+    elements.refreshButton.addEventListener("click", loadDashboard);
+    const compactWorkspace = window.matchMedia("(max-width: 1190px)");
+    const syncAgentExpanded = () => elements.openCopilotButton.setAttribute("aria-expanded", String(
+      !$('jobWorkspace').classList.contains('agent-hidden') && (!compactWorkspace.matches || $('jobWorkspace').classList.contains('agent-visible'))
+    ));
+    compactWorkspace.addEventListener("change", syncAgentExpanded);
+    syncAgentExpanded();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") loadDashboard();
+    });
+    window.setInterval(loadDashboard, 60000);
+    loadDashboard().then(() => loadCopilot()).catch(error => {
+      elements.copilotProvider.textContent = "对话暂不可用，请重新打开 Agent";
+    });
+  </script>
+</body>
+</html>

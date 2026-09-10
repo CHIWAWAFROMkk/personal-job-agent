@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>现代组件表单标签识别测试</title>
+  <style>
+    body { font-family: sans-serif; }
+    .ant-form-item, .row { margin: 12px; }
+    input, button { width: 280px; height: 32px; }
+  </style>
+</head>
+<body>
+  <form id="application">
+    <div class="ant-form-item">
+      <div class="ant-form-item-label">姓名</div>
+      <input>
+    </div>
+    <div class="row">
+      <span id="email-caption">电子邮箱</span>
+      <input aria-labelledby="email-caption">
+    </div>
+    <div class="row">
+      <input data-lable="手机号码">
+    </div>
+    <table>
+      <tr><th>毕业院校</th><td><input></td></tr>
+    </table>
+    <div class="row">
+      <span>专业</span>
+      <div><input></div>
+    </div>
+    <div class="row">
+      <input title="毕业日期">
+    </div>
+    <label>期望薪资<input></label>
+    <button type="submit">最终提交申请</button>
+  </form>
+  <script>
+    window.__jobAgentSubmitCount = 0;
+    window.__jobAgentEntryClickCount = 0;
+    document.querySelector('#application').addEventListener('submit', event => {
+      event.preventDefault();
+      window.__jobAgentSubmitCount += 1;
+    });
+  </script>
+</body>
+</html>
