@@ -31,7 +31,7 @@
   --radius: 10px;
   --shadow-dialog: 0 28px 80px rgba(24, 33, 43, .24);
   color-scheme: light;
-  font-family: "Job Agent Sans", "Microsoft YaHei UI", "Segoe UI Variable", sans-serif;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Job Agent Sans", "Segoe UI", sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -39,6 +39,8 @@ html { min-width: 320px; scroll-behavior: smooth; background: var(--canvas); }
 body { margin: 0; min-height: 100dvh; color: var(--ink); background: radial-gradient(ellipse at 6% 8%, #f5e9e5 0%, transparent 46%), radial-gradient(ellipse at 95% 85%, #c6d8e5 0%, transparent 52%), radial-gradient(ellipse at 72% 0%, #f7f8fc 0%, transparent 48%), var(--canvas); background-attachment: fixed; font-size: 14px; -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font: inherit; }
 button, summary { cursor: pointer; }
+button:not(.job-choice), .action-button, .job-open { white-space: nowrap; flex-shrink: 0; word-break: keep-all; }
+button:disabled { cursor: not-allowed; }
 a { color: inherit; }
 ::selection { color: var(--ink); background: #efc5cc; }
 input, textarea { caret-color: var(--accent); }
@@ -365,7 +367,7 @@ dialog.copilot-dialog { position: fixed; inset: 0 0 0 auto; width: min(520px,100
 .job-choice.is-applied[aria-current="true"] { border-color: #287346; box-shadow: 0 0 0 1px #287346; }
 .job-group-title { margin: 18px 12px 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .choice-company { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 12px; color: var(--ink-soft); }
-.choice-title { font-size: 15px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; }
+.choice-title { min-width: 0; font-size: 15px; font-weight: 600; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .choice-score { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 .job-choice[aria-current="true"] .choice-score { color: var(--accent); }
 .choice-signals { display: flex; flex-wrap: wrap; gap: 5px; color: var(--ink-faint); font-size: 10px; }
@@ -378,7 +380,7 @@ dialog.copilot-dialog { position: fixed; inset: 0 0 0 auto; width: min(520px,100
 .job-detail { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0,1fr); overflow: hidden; background: #fff; border: 0; border-radius: 0; box-shadow: none; }
 .detail-scroll { overflow-y: auto; min-height: 0; padding: 32px 36px 100px; scroll-padding-bottom: 100px; scrollbar-width: thin; }
 .position-head { padding-bottom: 32px; }
-.position-company { display: flex; gap: 12px; margin-bottom: 16px; color: var(--ink-soft); font-size: 13px; }
+.position-company { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--ink-soft); font-size: 13px; }
 .position-company span:last-child { color: var(--ink-faint); }
 .position-head h2 { margin: 0 0 14px; max-width: 24em; font-size: 32px; font-weight: 650; line-height: 1.35; letter-spacing: -.025em; overflow-wrap: anywhere; text-wrap: balance; }
 .position-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-soft); }
@@ -400,13 +402,13 @@ dialog.copilot-dialog { position: fixed; inset: 0 0 0 auto; width: min(520px,100
 .action-button.secondary, .action-button.ghost, .refresh-button.secondary { background: var(--surface); border-color: #b9c3cc; box-shadow: none; }
 .action-button:disabled { color: #62707a; background: #e9edef; border-color: #e1e5e8; opacity: 1; cursor: not-allowed; }
 .text-link { color: var(--ink-soft); font-size: 12px; text-decoration: none; }
-button.text-link { min-height: 34px; padding: 0; background: none; border: 0; }
+button.text-link { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 12px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; font-weight: 600; text-decoration: none; }
 .text-link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 4px; }
-.approval-link { width: 100%; text-align: left; color: var(--accent); }
+.approval-link { width: auto; color: var(--ink); }
 .fill-boundary { display: block; margin-top: 12px; font-size: 12px; color: var(--ink-faint); }
-.detail-tabs { display: flex; gap: 26px; margin-top: 14px; border-bottom: 1px solid var(--line); }
-.detail-tabs button { min-height: 52px; padding: 0; border: 0; border-bottom: 2px solid transparent; color: var(--ink-soft); background: none; font-size: 13px; }
-.detail-tabs button[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.detail-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.detail-tabs button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink-soft); background: var(--surface); font-size: 13px; }
+.detail-tabs button[aria-pressed="true"] { color: white; background: var(--ink); border-color: var(--ink); font-weight: 600; }
 .detail-tabs button span { margin-left: 5px; color: var(--ink-faint); font-size: 12px; font-variant-numeric: tabular-nums; }
 .position-content { padding-top: 24px; font-size: 14px; line-height: 1.85; }
 .jd-text { max-width: 72ch; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-soft); }
@@ -632,4 +634,117 @@ button.text-link { min-height: 34px; padding: 0; background: none; border: 0; }
   .topbar { background: Canvas; }
   .topbar-inner, .job-navigator, .job-detail, #copilotDialog, .position-toolbar, .copilot-compose, .job-choice[aria-current="true"] { border: 1px solid CanvasText; background: Canvas; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .nav-button.active, .job-filters button[aria-pressed="true"] { outline: 1px solid Highlight; background: Canvas; box-shadow: none; }
+}
+.ignored-company-mark {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #9f263d;
+  border-radius: 50%;
+  margin-inline-end: 7px;
+  vertical-align: baseline;
+}
+.ignored-company-note { color: #9f263d; font-size: 13px; }
+
+/* Operable controls: short single-line labels, visible edges, predictable states. */
+.action-button, .refresh-button, .job-open, .copilot-action, .copilot-suggestion,
+.top-button, .nav-button, .copilot-head-actions button, .copilot-send,
+.track-switch button, .job-filters button, .track-plan button, .icon-button {
+  border-radius: 8px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.action-button, .refresh-button, .job-open, .copilot-action, .copilot-suggestion {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 13px;
+  max-width: 100%;
+}
+.top-button, .nav-button, .copilot-head-actions button, .icon-button,
+.track-plan button {
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+.nav-button.active, .top-button.copilot-open {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: white;
+}
+.track-switch button, .job-filters button { border: 1px solid var(--line-strong); background: var(--surface); }
+.track-switch button[aria-pressed="true"], .job-filters button[aria-pressed="true"] {
+  background: var(--ink); border-color: var(--ink); color: white;
+}
+.track-switch { gap: 8px; padding: 0; background: transparent; }
+.track-switch button { display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px; }
+.track-plan { display: flex; justify-content: flex-end; margin-top: 8px; }
+.track-plan button { padding: 6px 10px; min-height: 32px; font-size: 12px; }
+.job-filters { gap: 6px; flex-wrap: wrap; }
+.job-filters button { padding: 7px 8px; min-height: 36px; }
+button.text-link:hover:not(:disabled), .copilot-suggestion:hover:not(:disabled),
+.copilot-head-actions button:hover:not(:disabled), .track-plan button:hover {
+  text-decoration: none; background: var(--surface-soft); border-color: var(--ink-soft); color: var(--ink);
+}
+button:disabled, button.text-link:disabled, .action-button:disabled {
+  color: #69727c; background: #edf0f3; border-color: #d8dee5;
+  opacity: 1; box-shadow: none;
+}
+.task-controls, .form-actions, .dialog-actions, .editor-entry-actions { gap: 8px; flex-wrap: wrap; }
+.position-toolbar { gap: 8px; padding: 8px; border-radius: 12px; }
+.position-head { padding-bottom: 24px; }
+.position-head h2 { font-size: 28px; font-weight: 600; letter-spacing: -.015em; }
+.position-tasks { gap: 24px; }
+.detail-scroll { padding: 28px 28px 110px; }
+.position-task p { margin: 8px 0 12px; }
+.position-task + .position-task { border: 0; }
+.copilot-head { padding: 20px 16px 14px; }
+.copilot-head-main { flex-wrap: wrap; align-items: flex-start; }
+.copilot-head-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.copilot-title { font-size: 17px; }
+.agent-boundaries { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 12px; line-height: 1.8; }
+.agent-boundaries p { margin: 0 0 6px; }
+.agent-boundaries strong { display: block; color: var(--ink); font-weight: 600; }
+.agent-boundaries summary, .secondary-explanation summary {
+  display: list-item; width: fit-content; min-height: 32px; padding: 4px 10px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface);
+  list-style-position: inside; white-space: nowrap;
+}
+.agent-boundaries details p { margin-top: 8px; }
+.copilot-empty { padding: 24px 20px; align-content: start; }
+.copilot-empty strong { font-size: 18px; }
+.copilot-suggestions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px 4px; }
+.copilot-suggestion { background: var(--surface); border: 1px solid var(--line-strong); padding: 8px 10px; }
+.copilot-compose { border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: none; }
+.copilot-input { font-size: 14px; line-height: 1.65; }
+.choice-company, .choice-meta { min-width: 0; }
+.choice-company { overflow: hidden; white-space: nowrap; }
+.choice-signals { font-size: 11px; }
+.job-choice { border-color: #dce1e6; background: rgba(255,255,255,.65); }
+.job-choice[aria-current="true"] { border-color: var(--ink-soft); background: white; }
+.job-choice.is-applied { border-color: #438362; }
+.job-choice.is-applied[aria-current="true"] { border-color: #287346; }
+.strategy-evidence, .workshop-gap-panel, .workshop-ready { border-left-width: 1px; }
+.detail-tabs button span { color: inherit; }
+@media (min-width: 641px) {
+  button.mobile-back { display: none; }
+}
+@media (max-width: 1450px) {
+  .position-tasks { grid-template-columns: minmax(0,1fr); gap: 20px; }
+  .position-task + .position-task { padding-top: 18px; border-top: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .detail-scroll { padding: 20px 18px 120px; }
+  .position-head h2 { font-size: 24px; }
+  .topbar-inner { gap: 6px; }
+  .top-actions { gap: 6px; }
+  .nav-button, .top-button { padding-inline: 8px; }
+  .action-button, .copilot-suggestion, button.text-link, .detail-tabs button { min-height: 44px; }
+  .detail-tabs { gap: 6px; }
+  .detail-tabs button { padding-inline: 10px; }
+  .position-toolbar { gap: 6px; padding: 6px; }
+  .position-toolbar button { padding-inline: 9px; }
+  .copilot-input { font-size: 16px; }
 }

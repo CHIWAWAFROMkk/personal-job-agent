@@ -292,6 +292,14 @@ def _job_source_url(job: JobDetail) -> str | None:
     return next((source.source_url for source in job.sources if source.source_url), None)
 
 
+def _open_job_page(url: str | None) -> None:
+    parsed = urlsplit(url or "")
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("这个岗位没有有效的招聘链接，请先补充原职位链接。")
+    if not webbrowser.open(url, new=2):
+        raise ValueError("系统浏览器未能启动，请检查 Windows 默认浏览器，或复制原职位链接手动打开。")
+
+
 def _safe_slug(value: str, *, fallback: str) -> str:
     normalized = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", value).strip("-")
     return normalized[:48] or fallback
@@ -468,6 +476,7 @@ def build_dashboard_snapshot(
     commute_filtered = 0
     outsourcing_filtered = 0
     pay_review_count = 0
+    archived_jobs = repository.archived_jobs()
     for job in jobs:
         application = application_by_job.get(job.job_id)
         detail = repository.get_job(job.job_id)
@@ -487,6 +496,7 @@ def build_dashboard_snapshot(
         row = DashboardJobRow(
             job_id=job.job_id,
             company=job.company,
+            job_archived=job.job_id in archived_jobs,
             title=job.title,
             location=job.location,
             match_score=job.match_score,
@@ -519,6 +529,8 @@ def build_dashboard_snapshot(
             workspace=_job_workspace(profile, detail, output_dir=output_dir),
         )
         tracked_jobs.append(row)
+        if row.job_archived:
+            continue
         if (job.match_score or 0) < 60:
             continue
         if application is not None and application.status not in {
@@ -548,6 +560,7 @@ def build_dashboard_snapshot(
     )
     tracked_jobs.sort(
         key=lambda item: (
+            item.job_archived,
             item.status not in {"applied", "hr_read", "resume_requested", "screening", "assessment", "written_test", "interview_1", "interview_2", "final_interview", "offer"},
             -int(item.deadline_urgent),
             -item.strategy_priority,
@@ -1533,9 +1546,7 @@ def create_dashboard_server(
                                 config=config,
                             )
                         except CloudAIUnavailableError as exc:
-                            suggestion = polish_resume_content_locally(content, job.jd_text)
-                            polish_engine = "local_fallback"
-                            warning = str(exc)
+                            raise ResumePolishError(f"{exc} 请修复连接后重试；原稿未修改。") from exc
                         else:
                             polish_engine = "cloud"
                             record_api_usage(
@@ -1714,6 +1725,8 @@ def create_dashboard_server(
                             user_instruction=instruction,
                         )
                     except ResumePolishError as exc:
+                        if config.ai.provider != "local":
+                            raise ResumePolishError(f"{exc} 本次未生成替代简版，请修复连接后重试；原有简历保留。") from exc
                         suggestion = polish_resume_content_locally(
                             content,
                             job.jd_text,
@@ -1927,6 +1940,8 @@ def create_dashboard_server(
                             user_instruction="按 JD 直接生成岗位专属简历，使用 STAR 法则突出相关真实经历。",
                         )
                     except ResumePolishError as exc:
+                        if config.ai.provider != "local":
+                            raise ResumePolishError(f"{exc} 本次未生成替代简版，请修复连接后重试；原有简历保留。") from exc
                         suggestion = polish_resume_content_locally(
                             content,
                             job.jd_text,
@@ -2057,6 +2072,27 @@ def create_dashboard_server(
                 )
                 return
 
+            company_match = re.fullmatch(r"/api/jobs/(\d+)/archive-job", path)
+            page_match = re.fullmatch(r"/api/jobs/(\d+)/open-page", path)
+            if company_match or page_match:
+                if not self._authorized_action():
+                    self._reject_unauthorized_action()
+                    return
+                try:
+                    payload = json.loads(self._read_body(_MAX_JSON_BODY).decode("utf-8"))
+                    if not isinstance(payload, dict):
+                        raise ValueError("请求格式不正确。")
+                    if company_match:
+                        repository.set_job_archived(int(company_match.group(1)), payload.get("ignored"))
+                    else:
+                        job = repository.get_job(int(page_match.group(1)))
+                        _open_job_page(_job_source_url(job))
+                except (ValueError, OSError, JobDatabaseError) as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._json({"ok": True})
+                return
+
             assist_match = re.fullmatch(r"/api/jobs/(\d+)/assist", path)
             if assist_match:
                 if not self._authorized_action():
@@ -2117,12 +2153,9 @@ def create_dashboard_server(
                         plan["resume_folder_revealed"] = _reveal_resume_in_explorer(
                             staged_resume
                         )
-                        threading.Thread(
-                            target=launch_assist_worker,
-                            args=(session_path, session.session_id),
-                            daemon=True,
-                            name=f"job-agent-assist-{job_id}",
-                        ).start()
+                        _open_job_page(_job_source_url(job))
+                        with assist_lock:
+                            assist_runs[session.session_id]["status"] = "opened"
                 except (
                     UnicodeDecodeError,
                     json.JSONDecodeError,

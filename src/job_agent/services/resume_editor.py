@@ -163,9 +163,16 @@ def validate_resume_content(content: object) -> dict[str, object]:
             entry_name = f"experience_sections[{section_index}].entries[{entry_index}]"
             if not isinstance(entry, dict):
                 raise ResumeEditorError(f"{entry_name} 必须是对象。")
-            _require_str(
-                entry.get("organization"), f"{entry_name}.organization", max_chars=_MAX_FIELD_CHARS
+            project_entry = entry.get("experience_kind") == "project" or (
+                not entry.get("experience_kind") and "项目" in section["title"]
             )
+            organization = entry.get("organization")
+            if project_entry and (organization is None or organization == ""):
+                _require_str(entry.get("role"), f"“{section['title']}”第{entry_index + 1}段的项目名称", max_chars=_MAX_FIELD_CHARS)
+            else:
+                _require_str(
+                    organization, f"“{section['title']}”第{entry_index + 1}段的机构 / 项目名称", max_chars=_MAX_FIELD_CHARS
+                )
             for field in ("role", "dates"):
                 if entry.get(field) is None:
                     continue

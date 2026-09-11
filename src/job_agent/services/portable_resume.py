@@ -271,6 +271,7 @@ def build_portable_resume_content(
     for experience, facts in selected:
         entry = {
             "experience_id": experience.id,
+            "experience_kind": experience.kind.value,
             "organization": experience.organization,
             "role": experience.role,
             "dates": _date_range(experience),
@@ -711,8 +712,7 @@ try {
     try:
         subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script],
                        env={**os.environ, "JOB_AGENT_EXPORT_DOCX": str(docx_path.resolve()), "JOB_AGENT_EXPORT_PDF": str(pdf_path.resolve())},
-                       # Leave room for one compact-layout retry and local rendering
-                       # within the dashboard client's 30-second request deadline.
+                       # Bound optional Office conversion; retain time for local fallback.
                        check=True, timeout=10, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
         return len(PdfReader(str(pdf_path)).pages)
     except (OSError, subprocess.SubprocessError, ValueError):

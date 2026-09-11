@@ -297,6 +297,10 @@ class JobRepository:
                     value TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS archived_jobs (
+                    job_id INTEGER PRIMARY KEY REFERENCES jobs(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     dedupe_key TEXT NOT NULL UNIQUE,
@@ -806,6 +810,21 @@ class JobRepository:
                 ),
             )
         return cursor.rowcount > 0
+
+    def archived_jobs(self) -> set[int]:
+        self.initialize()
+        with self._connection() as connection:
+            return {row[0] for row in connection.execute("SELECT job_id FROM archived_jobs")}
+
+    def set_job_archived(self, job_id: int, ignored: bool) -> None:
+        if not isinstance(ignored, bool):
+            raise ValueError("ignored 必须是布尔值。")
+        self.get_job(job_id)
+        with self._connection() as connection:
+            if ignored:
+                connection.execute("INSERT OR IGNORE INTO archived_jobs VALUES (?)", (job_id,))
+            else:
+                connection.execute("DELETE FROM archived_jobs WHERE job_id = ?", (job_id,))
 
     def list_jobs(self, *, limit: int = 20) -> list[JobListItem]:
         self.initialize()

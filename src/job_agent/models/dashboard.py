@@ -45,6 +45,7 @@ class DashboardJobRow(StrictModel):
     recommendation: str = ""
     status: str
     has_applied: bool = False
+    job_archived: bool = False
     applied_at: str | None = None
     source_url: str | None = None
     opportunity_track: Literal["daily_internship", "autumn_recruitment", "other"] = "other"

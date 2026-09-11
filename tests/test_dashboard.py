@@ -300,12 +300,13 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("Agent 对话", html)
                 self.assertIn('id="openCopilotButton"', html)
                 self.assertIn("生成草稿", html)
-                self.assertIn("人工投递准备", html)
+                self.assertIn("打开招聘页", html)
                 self.assertIn("原始职位", html)
                 self.assertIn("投递记录", html)
                 self.assertIn("实习机会", html)
                 self.assertIn("校招机会", html)
-                self.assertIn("项目工坊", html)
+                self.assertIn("项目练习", html)
+                self.assertIn("能力与限制", html)
                 self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
             with urllib.request.urlopen(root + "/api/dashboard", timeout=5) as response:
@@ -974,12 +975,13 @@ class DashboardTests(unittest.TestCase):
                 "job_agent.services.resume_polish._invoke_ai",
                 side_effect=CloudAIUnavailableError("OpenAI 身份验证失败（401）。"),
             ):
-                fallback = post_json(
-                    f"/api/jobs/{self.pending_job_id}/resume-content/polish",
-                    {"confirmed": True, "content": edited},
-                )
-            self.assertEqual(fallback["engine"], "local_fallback")  # type: ignore[index]
-            self.assertIn("401", fallback["warning"])  # type: ignore[index]
+                with self.assertRaises(urllib.error.HTTPError) as unavailable:
+                    post_json(
+                        f"/api/jobs/{self.pending_job_id}/resume-content/polish",
+                        {"confirmed": True, "content": edited},
+                    )
+                self.assertEqual(unavailable.exception.code, 400)
+                self.assertIn("401", unavailable.exception.read().decode("utf-8"))
             # 建议不落盘：重新 GET 仍是原稿
             with urllib.request.urlopen(
                 root + f"/api/jobs/{self.pending_job_id}/resume-content", timeout=10

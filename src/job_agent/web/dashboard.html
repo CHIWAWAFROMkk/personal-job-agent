@@ -49,15 +49,16 @@
             <button id="refreshButton" class="icon-button" type="button" aria-label="刷新职位" title="刷新职位"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 8.2A7 7 0 0 1 18.5 6L20 11M4 13l1.5 5a7 7 0 0 0 12.4-2.2"/></svg></button>
           </div>
           <div class="track-switch" role="group" aria-label="求职通道">
-            <button type="button" data-job-track="daily_internship" aria-pressed="false"><span>实习机会</span><small id="internshipShare">—</small></button>
-            <button type="button" data-job-track="autumn_recruitment" aria-pressed="false"><span>校招机会</span><small id="autumnShare">—</small></button>
+            <button type="button" data-job-track="daily_internship" aria-pressed="false"><span>实习机会</span><small id="internshipShare" hidden>—</small></button>
+            <button type="button" data-job-track="autumn_recruitment" aria-pressed="false"><span>校招机会</span><small id="autumnShare" hidden>—</small></button>
           </div>
-          <div class="track-plan"><span id="trackPlan">正在计算今日侧重…</span><button type="button" data-job-track="all" aria-pressed="false">全部</button></div>
+          <div class="track-plan"><span id="trackPlan" class="sr-only">正在计算今日侧重…</span><button type="button" data-job-track="all" aria-pressed="false">所有方向</button></div>
           <label class="search-field"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="jobSearch" type="search" placeholder="搜索公司或职位" aria-label="搜索公司或职位"></label>
           <div class="job-filters" aria-label="职位筛选">
             <button type="button" data-job-filter="all" aria-pressed="true">全部</button>
             <button type="button" data-job-filter="pending" aria-pressed="false">待投递</button>
             <button type="button" data-job-filter="applied" aria-pressed="false">已投递</button>
+            <button type="button" data-job-filter="archived" aria-pressed="false">已失效</button>
           </div>
         </div>
         <div id="jobs" class="job-list" aria-label="职位列表"><div class="empty-state">正在读取职位…</div></div>
@@ -79,6 +80,11 @@
         </div>
         <div class="copilot-state">
           <span id="copilotProvider">本地上下文</span>
+        </div>
+        <div class="agent-boundaries">
+          <p><strong>Agent 帮你</strong>分析岗位、修改简历、准备面试。</p>
+          <p><strong>由你完成</strong>核对简历、登录网站、填写上传、最终提交。</p>
+          <details><summary>能力与限制</summary><p>修改和生成基于你的真实经历，结果需要审阅。不会编造经历，也不会自动登录、上传或投递；招聘进度需要你核实补录。搜索渠道和 AI 连接取决于配置，不能保证岗位有效或获得面试。</p></details>
         </div>
       </header>
       <div id="copilotMessages" class="copilot-messages" aria-live="polite"></div>
@@ -1458,18 +1464,19 @@
       currentJobs = jobs;
       const query = $("jobSearch").value.trim().toLocaleLowerCase();
       const visible = jobs.filter((job) => {
-        const pending = !job.has_applied && pendingStatuses.has(job.status);
+        const pending = !job.job_archived && !job.has_applied && pendingStatuses.has(job.status);
         return (jobTrack === "all" || jobTrack === null || job.opportunity_track === jobTrack)
-          && (jobFilter === "all" || (jobFilter === "pending" ? pending : job.has_applied))
+          && (jobFilter === "all" || (jobFilter === "pending" ? pending : jobFilter === "archived" ? job.job_archived : job.has_applied))
           && (job.company + " " + job.title + " #" + job.job_id).toLocaleLowerCase().includes(query);
-      }).sort((a, b) => Number(Boolean(a.has_applied)) - Number(Boolean(b.has_applied)));
+      }).sort((a, b) => Number(Boolean(a.job_archived)) - Number(Boolean(b.job_archived)) || Number(Boolean(a.has_applied)) - Number(Boolean(b.has_applied)));
+      const group = job => job.job_archived ? "已失效 · 沉底" : job.has_applied ? "已投递" : "待投递与其他岗位";
       elements.jobsCount.textContent = String(visible.length);
       document.querySelectorAll("[data-job-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobFilter === jobFilter)));
       document.querySelectorAll("[data-job-track]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobTrack === jobTrack)));
       elements.jobs.innerHTML = visible.length ? visible.map((job, index) => `
-        ${jobFilter === "all" && (index === 0 || Boolean(job.has_applied) !== Boolean(visible[index - 1].has_applied)) ? `<h3 class="job-group-title">${job.has_applied ? "已投递" : "待投递与其他岗位"} · ${visible.filter(item => Boolean(item.has_applied) === Boolean(job.has_applied)).length}</h3>` : ""}
+        ${index === 0 || group(job) !== group(visible[index - 1]) ? `<h3 class="job-group-title">${group(job)} · ${visible.filter(item => group(item) === group(job)).length}</h3>` : ""}
         <button class="job-choice${job.has_applied ? " is-applied" : ""}" type="button" data-select-job="${job.job_id}" aria-current="${String(job.job_id) === String(selectedJobId) ? "true" : "false"}">
-          <strong class="choice-title">${escapeHtml(job.title)}</strong>
+          <strong class="choice-title" title="${escapeHtml(job.title)}">${job.job_archived ? '<span class="ignored-company-mark" role="img" aria-label="岗位已失效"></span>' : ""}${escapeHtml(job.title)}</strong>
           <span class="choice-company">${escapeHtml(job.company)}<span class="choice-score" title="本地匹配分，满分 100">${escapeHtml(job.match_score ?? "—")}</span></span>
           <span class="choice-signals"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span class="${escapeHtml(strategyBadgeClass(job.strategy_fit))}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "待判断")}</span></span>
           <span class="choice-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span>${job.has_applied && job.status !== "applied" ? "已投递 · " : ""}${escapeHtml(statusLabels[job.status] || job.status)}</span></span>
@@ -1514,8 +1521,9 @@
           <button class="mobile-back text-link" type="button" data-detail-action="back">返回职位</button>
           <header class="position-head">
             <h2 tabindex="-1">${escapeHtml(job.title)}</h2>
-            <div class="position-company"><span>${escapeHtml(job.company)}</span><span>#${job.job_id}</span></div>
-            <div class="position-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span class="badge ${statusBadgeClass(job.status)}">${escapeHtml(statusLabels[job.status] || job.status)}</span>${external ? `<a class="text-link" href="${escapeHtml(external)}" target="_blank" rel="noopener noreferrer">查看原职位</a>` : ""}</div>
+            <div class="position-company"><span>${job.job_archived ? '<span class="ignored-company-mark" aria-hidden="true"></span>' : ""}${escapeHtml(job.company)}</span><span>#${job.job_id}</span><button class="text-link" type="button" data-detail-action="archive-job" aria-pressed="${Boolean(job.job_archived)}">${job.job_archived ? "恢复岗位" : "岗位已失效"}</button></div>
+            ${job.job_archived ? '<p class="ignored-company-note">此岗位已标记失效并沉底；同公司的其他岗位不受影响，投递记录保留。</p>' : ""}
+            <div class="position-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span class="badge ${statusBadgeClass(job.status)}">${escapeHtml(statusLabels[job.status] || job.status)}</span></div>
             <div class="position-strategy" aria-label="岗位策略判断"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span>${escapeHtml(roleTierLabels[job.role_tier] || "方向待判断")}</span><span>${escapeHtml(compensationText(job))}</span><span class="badge ${strategyBadgeClass(job.strategy_fit)}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "需要判断")}</span>${job.deadline_urgent ? `<strong>截止仅余 ${escapeHtml(job.deadline_days)} 天</strong>` : ""}</div>
           </header>
           <div class="position-tasks" aria-label="岗位专属任务">
@@ -1524,28 +1532,32 @@
               ${status === "missing" ? '<details class="secondary-explanation"><summary>生成说明</summary><p>从已确认经历生成，针对这份 JD。</p></details>' : `<p>${status === "needs_review" ? "检查 PDF 后，确认可用于申请。" : "修改内容后，需要重新审阅。"}</p>`}
               <div class="task-controls">
                 <button class="action-button resume-task" type="button" data-detail-action="${status === "missing" ? "create-resume" : "open-resume"}">${status === "missing" ? "生成草稿" : "打开 PDF"}</button>
-                ${w.resume_editable ? '<button class="action-button secondary" type="button" data-detail-action="edit-resume">编辑</button><button class="text-link" type="button" data-detail-action="ask-agent-resume">让 Agent 修改</button>' : ""}
-                ${status === "needs_review" || (status === "ready" && !w.application_pack_ready) ? `<button class="text-link approval-link" type="button" data-detail-action="approve-resume">${status === "needs_review" ? "我已审阅，批准草稿" : "准备投递材料"}</button>` : ""}
+                ${w.resume_editable ? '<button class="action-button secondary" type="button" data-detail-action="edit-resume">编辑简历</button><button class="text-link" type="button" data-detail-action="ask-agent-resume">AI 修改</button>' : ""}
+                ${status === "needs_review" || (status === "ready" && !w.application_pack_ready) ? `<button class="text-link approval-link" type="button" data-detail-action="approve-resume">${status === "needs_review" ? "确认审阅" : "准备材料"}</button>` : ""}
               </div>
             </section>
             <section class="position-task fill-section">
-              <div class="task-heading"><h3>人工投递准备</h3><span>${w.safe_fill_ready ? "可开始" : "未就绪"}</span></div>
-              <p id="fillBlocker">${w.safe_fill_ready ? "打开岗位页，并在文件夹中选中已批准的岗位专用 PDF。" : escapeHtml((w.blockers || [])[0] || "先生成并批准这个职位的简历。")}</p>
-              <button class="action-button secondary safe-fill-task" type="button" data-detail-action="manual-apply" aria-describedby="fillBlocker" ${w.safe_fill_ready ? "" : "disabled"}>打开岗位页与简历</button>
+              <div class="task-heading"><h3>打开招聘页</h3><span>${w.safe_fill_ready ? "材料已就绪" : external ? "可打开" : "缺少链接"}</span></div>
+              <p id="fillBlocker">${w.safe_fill_ready ? "可打开岗位页，也可同时定位已批准的岗位专用 PDF。" : "可以先查看招聘页；上传前请生成并审阅岗位简历。"}</p>
+              <div class="task-controls">
+              <button class="action-button secondary" type="button" data-detail-action="open-page" ${external ? "" : "disabled"}>打开岗位</button>
+              <button class="text-link safe-fill-task" type="button" data-detail-action="manual-apply" aria-describedby="fillBlocker" title="打开招聘页，并在资源管理器中选中已批准的简历；不会上传或提交" ${w.safe_fill_ready ? "" : "disabled"}>打开材料</button>
+              </div>
+              ${!external ? '<p>缺少有效招聘链接，请补充原职位链接。</p>' : ""}
               <span class="fill-boundary">登录、作品集、表单与提交由你完成</span>
             </section>
           </div>
           <nav class="detail-tabs" aria-label="职位详情">
             <button type="button" data-detail-tab="jd" aria-pressed="true">职位描述</button>
             <button type="button" data-detail-tab="match" aria-pressed="false">匹配依据 <span>${escapeHtml(job.match_score ?? "—")}</span></button>
-            <button type="button" data-detail-tab="project" aria-pressed="false">项目工坊</button>
+            <button type="button" data-detail-tab="project" aria-pressed="false">项目练习</button>
             <button type="button" data-detail-tab="progress" aria-pressed="false">投递记录</button>
           </nav>
           <div id="positionContent" class="position-content" aria-live="polite"><div class="empty-state">正在读取岗位详情…</div></div>
         </div>
         <div class="position-toolbar">
           <button type="button" class="text-link" data-detail-action="status">更新进度</button>
-          <button type="button" class="text-link" data-detail-action="commute">${escapeHtml(commuteText(job))} · 通勤</button>
+          <button type="button" class="text-link" data-detail-action="commute" title="${escapeHtml(commuteText(job))}">通勤评估</button>
           <button type="button" class="text-link" data-detail-action="interview">面试准备</button>
         </div>`;
     }
@@ -1798,24 +1810,24 @@
 
     async function createResumeDraft(jobId) {
       if (!window.confirm(`为岗位 #${jobId} 生成一份只使用已确认事实的专属简历草稿？生成后仍需你本人打开 PDF 审阅。`)) return false;
-      const preview = window.open("about:blank", "_blank");
+      const generationButton = document.querySelector('[data-detail-action="create-resume"]');
+      if (generationButton) generationButton.textContent = "正在生成…";
+      showSuccess(`正在为岗位 #${jobId} 生成简历，请留在软件中等待。完成后可点击“打开 PDF”。`);
       try {
         const result = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/resume-draft`, { confirmed: true });
-        const pdfUrl = result.workspace?.resume_pdf_url || `/resume-draft/${encodeURIComponent(jobId)}/pdf`;
-        if (preview) preview.location.href = pdfUrl;
-        else window.open(pdfUrl, "_blank", "noopener");
         await loadDashboard();
         const generation = result.generation || {};
         if (generation.engine === "local_fallback") {
           showError(`已生成本地事实草稿，整份 AI 写作本次未完成。${generation.warning || "请检查 API 配置后重试。"} 请先审阅 PDF。`);
         } else {
-          showSuccess(`岗位 #${jobId} 的简历草稿已生成。${generation.strategy || ""} 请检查 PDF 后再批准。`);
+          showSuccess(`岗位 #${jobId} 的简历草稿已生成，请点击“打开 PDF”审阅后再批准。${generation.strategy || ""}`);
         }
         return true;
       } catch (error) {
-        if (preview) preview.close();
         showError(`简历草稿生成失败：${error?.message || error}`);
         return false;
+      } finally {
+        if (generationButton?.isConnected) generationButton.textContent = "生成草稿";
       }
     }
 
@@ -2020,7 +2032,7 @@
       $("historyCopilotButton").textContent = copilotHistory ? "返回当前" : "历史";
       $("copilotScope").textContent = copilotHistory ? "全部历史 · 发送仍绑定当前职位" : (selectedJobId ? `#${selectedJobId} · ${currentJobs.find(job => job.job_id === selectedJobId)?.company || ""}` : "未选择职位");
       if (!messages.length) {
-        elements.copilotMessages.innerHTML = `<div class="copilot-empty"><strong>这个职位，<br>从哪里开始？</strong><span>分析匹配、修改简历或准备面试。<br>执行前由你确认。</span></div>`;
+        elements.copilotMessages.innerHTML = `<div class="copilot-empty"><strong>从这份 JD 开始</strong><span>告诉我你想解决的问题。也可以从下方选择一个任务。</span></div>`;
       } else {
         elements.copilotMessages.innerHTML = messages.map((message) => {
           const roleLabel = message.role === "user" ? "你" : "求职 Agent";
@@ -2036,7 +2048,8 @@
           </article>`;
         }).join("");
       }
-      elements.copilotSuggestions.innerHTML = (selectedJobId ? ["分析我的简历，给我经历写作模板", "为什么匹配？", "准备简历草稿"] : (snapshot?.suggestions || [])).map((suggestion) => `<button class="copilot-suggestion" type="button" data-copilot-suggestion="${escapeHtml(suggestion)}">${escapeHtml(suggestion)}</button>`).join("");
+      const quickTasks = selectedJobId ? [["分析匹配", "为什么匹配？"], ["改写经历", "分析我的简历，给我经历写作模板"], ["面试准备", "这个职位面试该准备什么？"]] : [["求职建议", "根据我的经历，今天应该优先处理哪些求职任务？"]];
+      elements.copilotSuggestions.innerHTML = quickTasks.map(([label, prompt]) => `<button class="copilot-suggestion" type="button" data-copilot-suggestion="${escapeHtml(prompt)}">${label}</button>`).join("");
       requestAnimationFrame(() => { elements.copilotMessages.scrollTop = elements.copilotMessages.scrollHeight; });
     }
 
@@ -2327,6 +2340,16 @@
       if (action === "retry") return loadJobDetail(currentJobs.find(job => job.job_id === jobId));
       button.disabled = true;
       try {
+        if (action === "archive-job") {
+          const ignored = !currentJobs.find(job => job.job_id === jobId)?.job_archived;
+          await postLocalJson(`/api/jobs/${jobId}/archive-job`, { ignored });
+          await loadDashboard();
+          showSuccess(ignored ? "此岗位已标记失效并沉底，可随时恢复。" : "此岗位已恢复。");
+        }
+        if (action === "open-page") {
+          await postLocalJson(`/api/jobs/${jobId}/open-page`, {});
+          showSuccess("已请求系统浏览器打开招聘页。登录与提交由你完成，不会自动标记为已投递。");
+        }
         if (action === "create-resume") await createResumeDraft(jobId);
         if (action === "approve-resume") await approveResumeDraft(jobId);
         if (action === "manual-apply") await startManualApply(jobId);

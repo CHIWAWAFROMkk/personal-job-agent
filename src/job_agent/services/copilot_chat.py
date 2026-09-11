@@ -170,8 +170,9 @@ def build_safe_workspace_context(
     jobs = repository.list_jobs(limit=1000)
     applications = repository.list_applications(limit=1000)
     application_by_job = {item.job_id: item for item in applications}
+    ignored = repository.archived_jobs()
     ranked_jobs = sorted(
-        jobs,
+        [job for job in jobs if job.job_id not in ignored],
         key=lambda item: (-(item.match_score if item.match_score is not None else -1), -item.job_id),
     )
     top_jobs = []
