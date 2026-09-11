@@ -1116,12 +1116,16 @@ class DashboardTests(unittest.TestCase):
                 with urllib.request.urlopen(request, timeout=30) as response:
                     return json.loads(response.read().decode("utf-8"))
 
-            # 先生成草稿
+            # Explicit local fixture generation must not rely on a failed cloud API.
+            configured = json.loads((private_dir / "app-settings.json").read_text(encoding="utf-8"))
+            save_runtime_config(RuntimeConfig(), private_dir / "app-settings.json")
             draft = post_json(
                 f"/api/jobs/{self.pending_job_id}/resume-draft",
                 {"confirmed": True},
             )
             self.assertEqual(draft["workspace"]["resume_status"], "needs_review")  # type: ignore[index]
+
+            save_runtime_config(RuntimeConfig.model_validate(configured), private_dir / "app-settings.json")
 
             # 空文本 → 400
             with mock.patch(
