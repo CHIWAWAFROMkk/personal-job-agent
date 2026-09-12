@@ -10,7 +10,7 @@ $desktopBuildRoot = Join-Path $desktopProjectRoot "build\desktop\$desktopBuildSt
 $desktopWorkRoot = Join-Path $desktopProjectRoot "build\pyinstaller\$desktopBuildStamp"
 $desktopDistRoot = Join-Path $desktopProjectRoot "dist\desktop\$desktopBuildStamp"
 $desktopProductRoot = Join-Path $desktopDistRoot "PersonalJobAgent"
-$desktopArchive = Join-Path $desktopProjectRoot "dist\PersonalJobAgent-0.8.2-Windows-x64-$desktopBuildStamp.zip"
+$desktopArchive = Join-Path $desktopProjectRoot "dist\PersonalJobAgent-0.8.3-Windows-x64-$desktopBuildStamp.zip"
 $desktopIcon = Join-Path $desktopBuildRoot "PersonalJobAgent.ico"
 
 if (-not (Test-Path -LiteralPath $desktopPython)) {

@@ -6,16 +6,17 @@
 }
 
 :root {
-  --ink: #202329;
-  --ink-soft: #50545e;
-  --ink-faint: #626671;
-  --canvas: #e8ebf0;
+  --ink: #1d1d1f;
+  --ink-soft: #474747;
+  --ink-faint: #707070;
+  --canvas: #f5f5f7;
   --surface: #ffffff;
-  --surface-soft: #f7f8fa;
-  --line: #dce1e6;
-  --line-strong: #aeb8c2;
-  --accent: #9f263d;
-  --accent-soft: #fbf0f2;
+  --surface-soft: #f5f5f7;
+  --line: #d2d2d7;
+  --line-strong: #858585;
+  --accent: #0066cc;
+  --accent-soft: #edf5ff;
+  --action-fill: #0071e3;
   --teal: #176d62;
   --teal-soft: #e8f5f2;
   --amber: #9a5b16;
@@ -42,7 +43,7 @@ button, summary { cursor: pointer; }
 button:not(.job-choice), .action-button, .job-open { white-space: nowrap; flex-shrink: 0; word-break: keep-all; }
 button:disabled { cursor: not-allowed; }
 a { color: inherit; }
-::selection { color: var(--ink); background: #efc5cc; }
+::selection { color: var(--ink); background: #cce4ff; }
 input, textarea { caret-color: var(--accent); }
 input::placeholder, textarea::placeholder { color: var(--ink-faint); opacity: 1; }
 h1, h2, h3, p { margin-top: 0; }
@@ -747,4 +748,205 @@ button:disabled, button.text-link:disabled, .action-button:disabled {
   .position-toolbar { gap: 6px; padding: 6px; }
   .position-toolbar button { padding-inline: 9px; }
   .copilot-input { font-size: 16px; }
+}
+
+/* Today-first flow: navigation, decision, then one next action. */
+body { background: var(--canvas); }
+.topbar-inner { background: #fff; border-color: var(--line); backdrop-filter: none; border-radius: 12px; }
+.top-actions .system-state { display: none; }
+.today-panel { max-width: 1240px; margin: 12px auto 40px; padding: 32px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+.today-head, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.today-head { margin-bottom: 32px; }
+.today-head h1 { margin: 0; font-size: 28px; line-height: 1.4; font-weight: 650; }
+.today-head p, .profile-connections p { color: var(--ink-soft); font-size: 14px; margin: 8px 0 0; }
+.today-grid { display: grid; grid-template-columns: minmax(0,1.65fr) minmax(280px,1fr); gap: 40px; }
+.section-heading { margin-bottom: 12px; }
+.section-heading h2, .setup-guide h2, .profile-connections h2 { font-size: 18px; margin: 0; }
+.today-side { border-left: 1px solid var(--line); padding-left: 28px; }
+.today-side > section + section { margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--line); }
+.today-focus { min-width: 0; padding: 26px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
+.today-focus-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.today-focus-head > div { min-width: 0; }
+.today-focus-head h2 { margin: 0; font-size: 28px; font-weight: 600; line-height: 1.25; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.today-focus-head p { margin: 9px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.today-focus-score { flex: 0 0 auto; color: var(--ink); font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.today-focus-score small { color: var(--ink-faint); font-size: 12px; font-weight: 400; }
+.today-focus-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 20px; margin: 24px 0 0; padding: 20px 0; border-block: 1px solid var(--line); }
+.today-focus-facts dt { color: var(--ink-faint); font-size: 12px; }
+.today-focus-facts dd { margin: 8px 0 0; font-size: 14px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.today-focus-reason { max-width: 66ch; margin: 20px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.75; overflow-wrap: anywhere; }
+.today-focus-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.today-queue { margin-top: 22px; border-top: 1px solid var(--line); }
+.today-queue > summary { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.today-queue > summary small { color: var(--ink-faint); font-size: 12px; font-weight: 400; }
+.today-queue[open] > summary { border-bottom: 1px solid var(--line); }
+.today-job { display: flex; gap: 20px; align-items: center; padding: 22px 0; border-bottom: 1px solid var(--line); }
+.today-job-body { min-width: 0; flex: 1; }
+.today-job h3 { font-size: 17px; line-height: 1.5; margin: 0 0 7px; overflow-wrap: anywhere; }
+.today-job p { margin: 0; font-size: 13px; color: var(--ink-soft); }
+.today-job-facts { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink); margin-top: 10px; }
+.today-job .today-job-note { margin-top: 8px; color: var(--ink-soft); }
+.section-note { margin: 16px 0 0; color: var(--ink-faint); font-size: 12px; line-height: 1.7; }
+.task-empty { margin: 16px 0; padding: 12px 0; color: var(--ink-soft); font-size: 14px; line-height: 1.8; }
+.task-empty p { margin: 0 0 14px; }
+button.feedback-row { display: flex; flex-direction: column; align-items: flex-start; width: 100%; gap: 6px; padding: 14px; margin-top: 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink-soft); background: white; text-align: left; font-size: 13px; }
+button.feedback-row strong { color: var(--ink); font-size: 14px; }
+button.feedback-row span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+button.feedback-row:hover { background: var(--surface-soft); border-color: var(--ink-soft); }
+.feedback-item { display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--line); padding: 16px 0; }
+.feedback-item > div { min-width: 0; flex: 1; }
+.feedback-item strong, .feedback-item span { display: block; font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.feedback-item strong { color: var(--ink); font-size: 14px; }
+.feedback-item span { color: var(--ink-soft); margin-top: 4px; }
+.setup-guide { padding: 28px; margin-bottom: 32px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+.setup-guide p { font-size: 14px; line-height: 1.7; }
+.setup-steps { display: flex; flex-wrap: wrap; gap: 14px 32px; padding-left: 20px; margin: 20px 0; color: var(--ink-soft); font-size: 13px; }
+.setup-steps [aria-current] { color: var(--ink); font-weight: 700; }
+.job-workspace, .job-workspace.agent-hidden { max-width: 1240px; margin: 12px auto 24px; grid-template-columns: minmax(0,1fr); border: 1px solid var(--line); border-radius: 14px; box-shadow: none; background: white; height: calc(100dvh - 108px); }
+.job-workspace:not(.detail-visible) #jobDetail, .job-workspace:not(.detail-visible) #copilotDialog { display: none; }
+.job-workspace:not(.detail-visible) .job-navigator { display: flex; flex-direction: column; border: 0; background: white; backdrop-filter: none; }
+.job-workspace.detail-visible .job-navigator { display: none; }
+.job-workspace.detail-visible #jobDetail { display: grid; }
+.job-workspace.detail-visible.agent-visible { grid-template-columns: minmax(0,1fr) 340px; }
+.job-workspace.agent-visible #copilotDialog { display: grid; }
+.navigator-head { padding: 24px 28px 16px; display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px 24px; flex-shrink: 0; }
+.job-list { flex: 1; min-height: 0; }
+.navigator-title { grid-column: 1 / -1; margin-bottom: 0; }
+.track-switch { grid-column: 1; }
+.track-plan { grid-column: 2; grid-row: 2; margin: 0; justify-content: flex-start; }
+.search-field { grid-column: 1; }
+.job-filters { grid-column: 2; margin: 0; align-items: center; }
+.job-list { padding: 0 28px 24px; }
+.job-group-title { margin: 20px 0 10px; }
+.job-choice { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr); gap: 16px; align-items: center; min-height: 72px; padding: 16px; border-radius: 8px; background: white; margin-bottom: 8px; box-shadow: none; }
+.choice-title { font-size: 16px; }
+.choice-company { font-size: 13px; }
+.choice-signals { display: none; }
+.choice-meta { font-size: 13px; }
+.navigator-foot { padding: 12px 28px; }
+.detail-scroll { padding: 24px 36px 48px; scroll-padding-bottom: 24px; }
+.job-detail { grid-template-rows: auto minmax(0,1fr); }
+.detail-navigation { padding: 12px 18px; border-bottom: 1px solid var(--line); background: white; }
+.detail-back { margin: 0; }
+.position-head { padding-bottom: 0; }
+.position-head h2 { font-size: 28px; margin-bottom: 10px; }
+.position-company { margin-bottom: 8px; }
+.decision-facts { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 20px; padding: 20px 0; margin: 20px 0 0; border-block: 1px solid var(--line); }
+.decision-facts dt { color: var(--ink-faint); font-size: 12px; margin-bottom: 8px; }
+.decision-facts dd { font-size: 15px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.decision-summary { padding: 20px 0 12px; }
+.decision-summary h3 { margin: 0 0 8px; font-size: 16px; }
+.decision-summary p { margin: 8px 0; font-size: 14px; line-height: 1.75; max-width: 76ch; }
+.decision-warning { color: #80551c; }
+.next-action { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 16px; background: var(--surface-soft); padding: 18px; border-radius: 10px; margin: 12px 0; }
+.next-action h3 { margin: 0 0 7px; font-size: 16px; }
+.next-action p { color: var(--ink-soft); font-size: 12px; margin: 0; }
+.next-action .task-controls { margin: 0; }
+.job-more { margin: 16px 0 24px; }
+.job-more > summary, .progress-statistics > summary { width: fit-content; cursor: pointer; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 8px; font-size: 13px; color: var(--ink-soft); }
+.job-more .task-controls { margin-top: 12px; }
+.detail-tabs { margin-top: 20px; }
+.copilot-head { padding: 20px 16px 12px; }
+.agent-boundaries > p { display: none; }
+.agent-boundaries { padding-top: 0; margin-top: 8px; border: 0; }
+.overview-panel { max-width: 1240px; margin: 12px auto 24px; padding: 28px; border-radius: 14px; background: white; border: 1px solid var(--line); }
+.overview-head h1 { margin: 16px 0 0; }
+.overview-panel[data-mode="progress"] .context-grid, .overview-panel[data-mode="progress"] .profile-connections { display: none; }
+.overview-panel[data-mode="profile"] > .layout-grid, .overview-panel[data-mode="profile"] .progress-statistics { display: none; }
+.overview-panel .panel-kicker, .overview-panel .utility-summary small { display: none; }
+.progress-statistics { margin-top: 24px; }
+.profile-connections { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line); }
+.profile-connections button { margin-top: 16px; }
+.overview-panel[data-mode="profile"] .context-grid { grid-template-columns: minmax(0,1fr); }
+.overview-panel[data-mode="profile"] .profile-name { font-size: 18px; font-weight: 600; }
+.overview-panel[data-mode="profile"] .profile-meta { font-size: 14px; line-height: 1.8; margin-top: 8px; }
+.overview-panel[data-mode="profile"] .preference-label { font-size: 15px; font-weight: 600; color: var(--ink); }
+.overview-panel[data-mode="profile"] .preference-value { font-size: 14px; }
+.overview-panel[data-mode="profile"] .preference-note { font-size: 13px; }
+.overview-panel .work-card-score { display: none; }
+.overview-panel .work-card-title { font-size: 16px; margin-top: 6px; }
+.overview-panel .work-card-company, .overview-panel .timeline-title { font-size: 14px; }
+.overview-panel .timeline-change { font-size: 14px; margin: 8px 0; }
+@media (max-width: 900px) {
+  .today-panel, .overview-panel { margin: 8px; padding: 24px; }
+  .today-grid { grid-template-columns: minmax(0,1fr); gap: 28px; }
+  .today-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 24px; }
+  .job-workspace, .job-workspace.agent-hidden { margin: 8px; }
+  .job-workspace.detail-visible.agent-visible { grid-template-columns: minmax(0,1fr); }
+  .job-workspace.agent-visible #jobDetail { display: none; }
+  .decision-facts { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .job-choice { grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+  .choice-meta { grid-column: 1 / -1; }
+}
+@media (max-width: 640px) {
+  .topbar { height: auto; padding-bottom: 4px; }
+  .topbar-inner { flex-wrap: wrap; gap: 8px; padding: 10px; }
+  .brand { flex: 1; }
+  .top-actions { margin-left: auto; }
+  .workspace-nav { order: 3; width: 100%; justify-content: space-between; gap: 8px; }
+  .workspace-nav .nav-button { flex: 1; border-radius: 8px; min-height: 40px; }
+  .today-head { align-items: flex-start; margin-bottom: 24px; }
+  .today-head h1 { font-size: 24px; }
+  .today-panel, .overview-panel { padding: 20px 16px; }
+  .today-focus { padding: 20px 16px; }
+  .today-focus-head { gap: 14px; }
+  .today-focus-head h2 { font-size: 24px; }
+  .today-focus-facts { grid-template-columns: minmax(0,1fr); gap: 14px; }
+  .today-focus-facts div + div { padding-top: 14px; border-top: 1px solid var(--line); }
+  .today-focus-facts dd { margin-top: 4px; }
+  .today-focus-actions .action-button { width: 100%; }
+  .today-job { gap: 12px; flex-wrap: wrap; }
+  .today-job-body { flex-basis: 100%; }
+  .job-workspace, .job-workspace.agent-hidden { height: calc(100dvh - 136px); min-height: 250px; }
+  .navigator-head { padding: 18px 16px 12px; gap: 10px; }
+  .track-switch { grid-column: 1 / -1; }
+  .track-plan { grid-column: 1 / -1; grid-row: auto; }
+  .search-field, .job-filters { grid-column: 1 / -1; }
+  .job-list { padding: 0 16px 20px; }
+  .job-choice { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  .detail-scroll { padding: 20px 18px 40px; }
+  .position-head h2 { font-size: 24px; }
+  .decision-facts { gap: 18px; }
+  .setup-guide { padding: 18px; }
+}
+
+/* Apple reference, adapted to the existing task flow: flat surfaces, sparse blue. */
+.topbar-inner, .job-navigator, #copilotDialog, .position-toolbar, .copilot-compose {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+}
+.topbar-inner { background: var(--canvas); border-color: transparent; border-bottom-color: var(--line); border-radius: 0; }
+.brand-mark { background: var(--ink); box-shadow: none; border-color: transparent; }
+.today-panel, .overview-panel, .job-workspace, .job-workspace.agent-hidden { border-radius: 8px; box-shadow: none; }
+#copilotDialog { background: var(--surface-soft); border-left-color: var(--line); }
+.copilot-compose, .search-field { background: white; border: 1px solid var(--line); border-radius: 8px; box-shadow: none; }
+.position-toolbar { background: var(--surface); border: 1px solid var(--line); }
+.action-button, .refresh-button, .job-open, .copilot-action, .copilot-suggestion,
+.top-button, .nav-button, .copilot-head-actions button, .copilot-send,
+.track-switch button, .job-filters button, .track-plan button, .icon-button {
+  border-radius: 980px;
+  font-weight: 400;
+  box-shadow: none;
+}
+.action-button:not(.secondary):not(:disabled), .copilot-send:not(:disabled) {
+  background: var(--action-fill); border-color: var(--action-fill); color: white;
+}
+.action-button.secondary:not(:disabled) { background: transparent; border-color: var(--accent); color: var(--accent); }
+.action-button:not(.secondary):hover:not(:disabled), .copilot-send:hover:not(:disabled) { background: #0066cc; border-color: #0066cc; }
+.nav-button, .top-button, .copilot-head-actions button { border-color: transparent; background: transparent; }
+.nav-button.active, .top-button.copilot-open { background: transparent; color: var(--accent); border-color: transparent; box-shadow: none; }
+.nav-button.active { font-weight: 600; }
+.track-switch button, .job-filters button { border-color: var(--line); }
+.track-switch button[aria-pressed="true"], .job-filters button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.job-choice[aria-current="true"] { border-color: var(--accent); box-shadow: none; }
+.today-head h1, .position-head h2, .overview-head h1, .copilot-title { font-weight: 600; letter-spacing: -.015em; }
+.decision-summary p, .jd-copy, .copilot-message-content { line-height: 1.75; }
+.setup-guide, .next-action { border-radius: 8px; }
+.detail-tabs button { border-radius: 980px; border-color: transparent; background: transparent; color: var(--ink-soft); font-weight: 400; }
+.detail-tabs button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; box-shadow: none; }
+@media (forced-colors: active) {
+  .topbar-inner, #copilotDialog, .copilot-compose, .search-field, .position-toolbar { background: Canvas; border-color: CanvasText; }
+  .action-button:not(.secondary):not(:disabled), .copilot-send:not(:disabled) { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+  .nav-button.active, .track-switch button[aria-pressed="true"], .job-filters button[aria-pressed="true"] { outline: 1px solid Highlight; }
 }

@@ -26,13 +26,13 @@
 
 ## Windows 桌面版（推荐）
 
-桌面发行包是 `dist/PersonalJobAgent-0.8.2-Windows-x64-<构建时间>.zip`。对方不需要安装
+桌面发行包是 `dist/PersonalJobAgent-0.8.3-Windows-x64-<构建时间>.zip`。对方不需要安装
 Python：完整解压后双击 `PersonalJobAgent.exe`，程序会在独立 Windows 窗口中
 打开，不会占用浏览器标签页。
 
-0.8.2 新增本机 Codex 接入、根据完整已确认经历库生成 JD 定向简历、黑白 A4
-默认模板，以及已投递岗位筛选与分组。对话可以分析简历并提供带占位符的写作模板；
-AI 写作失败时会明确提示本地回退。详细变化见 [更新记录](CHANGELOG.md)。
+0.8.3 将首页改为聚焦单一主任务的“今日”工作台，并把职位、投递进度和个人资料
+拆成清晰入口；同时保留 0.8.2 的本机 Codex、证据化简历与可靠性修复。
+详细变化见 [更新记录](CHANGELOG.md)。
 
 使用 Codex 时，需要另外安装并登录本机 Codex CLI，并具备可用模型权限与额度。
 在设置中选择 Codex，模型可填写 `codex-default`；无需填写或复制 API Key。
