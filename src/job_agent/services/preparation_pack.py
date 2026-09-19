@@ -941,6 +941,7 @@ def write_preparation_pack(
         pack_json = temporary / "preparation-pack.json"
         markdown = temporary / "岗位学习与面试准备.md"
         jd_text = temporary / "JD.txt"
+        # 已通过目录级 replace 保证原子性
         pack_json.write_text(pack.model_dump_json(indent=2) + "\n", encoding="utf-8")
         markdown.write_text(render_preparation_pack_markdown(pack), encoding="utf-8")
         jd_text.write_text(job.jd_text.rstrip() + "\n", encoding="utf-8")

@@ -299,18 +299,23 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn('id="queueButton"', html)
                 self.assertIn("Agent 对话", html)
                 self.assertIn('id="openCopilotButton"', html)
-                self.assertIn("生成草稿", html)
-                self.assertIn("打开招聘页", html)
-                self.assertIn("原始职位", html)
-                self.assertIn("投递记录", html)
+                self.assertIn('<script type="module" src="/js/main.js">', html)
                 self.assertIn('id="todayPanel"', html)
                 self.assertIn("今天，先推进一个岗位", html)
-                self.assertIn("接下来再处理", html)
                 self.assertIn("实习机会", html)
                 self.assertIn("校招机会", html)
-                self.assertIn("项目练习", html)
                 self.assertIn("能力与限制", html)
                 self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+
+            with urllib.request.urlopen(root + "/js/main.js", timeout=5) as response:
+                self.assertIn("javascript", response.headers["Content-Type"])
+                script = response.read().decode("utf-8")
+                self.assertIn("生成草稿", script)
+                self.assertIn("打开招聘页", script)
+                self.assertIn("原始职位", script)
+                self.assertIn("投递记录", script)
+                self.assertIn("接下来再处理", script)
+                self.assertIn("项目练习", script)
 
             with urllib.request.urlopen(root + "/api/dashboard", timeout=5) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -348,7 +353,7 @@ class DashboardTests(unittest.TestCase):
 
             with urllib.request.urlopen(root + "/api/settings", timeout=5) as response:
                 settings = json.loads(response.read().decode("utf-8"))
-                self.assertIn(settings["ai"]["provider"], {"local", "openai"})
+                self.assertIn(settings["ai"]["provider"], {"local", "openai", "deepseek"})
                 self.assertNotIn("api_key", settings["ai"])
                 self.assertNotIn("api_key", settings["search"])
                 self.assertNotIn("api_key", settings["maps"])

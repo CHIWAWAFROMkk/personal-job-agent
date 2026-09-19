@@ -5,7 +5,7 @@ import json
 import re
 import sqlite3
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Iterator
@@ -25,6 +25,7 @@ from job_agent.models.interview_debrief import (
     InterviewDebriefSaveResult,
 )
 from job_agent.models.job import MatchResult
+from job_agent.services.tracking_parser import safe_public_url
 from job_agent.models.job_record import (
     CandidateVerificationStatus,
     JobDatabaseStats,
@@ -39,92 +40,19 @@ from job_agent.models.job_record import (
 )
 
 
-SCHEMA_VERSION = "5"
-COMPATIBLE_SCHEMA_VERSIONS = {"1", "2", "3", "4", SCHEMA_VERSION}
-
-COMPANY_SUFFIXES = (
-    "股份有限公司",
-    "有限责任公司",
-    "有限公司",
-    "集团公司",
-    "集团",
-    "公司",
+from job_agent.constants import (
+    SCHEMA_VERSION,
+    COMPATIBLE_SCHEMA_VERSIONS,
+    COMPANY_SUFFIXES,
+    CITY_NAMES,
+    TRACKING_QUERY_KEYS,
+    CANDIDATE_VERIFICATION_STATUSES,
+    APPLICATION_STATUSES,
+    SUBMITTED_APPLICATION_STATUSES,
+    APPLICATION_STAGE_RANK,
+    TERMINAL_APPLICATION_STATUSES,
 )
 
-CITY_NAMES = (
-    "上海",
-    "北京",
-    "深圳",
-    "广州",
-    "杭州",
-    "成都",
-    "南京",
-    "苏州",
-    "武汉",
-    "西安",
-    "重庆",
-    "天津",
-)
-
-TRACKING_QUERY_KEYS = {
-    "from",
-    "fromsource",
-    "page_source",
-    "pagesource",
-    "pcm",
-    "ref",
-    "source",
-    "spm",
-}
-
-CANDIDATE_VERIFICATION_STATUSES = {
-    "pending",
-    "live",
-    "expired",
-    "blocked",
-    "irrelevant",
-    "needs_manual_review",
-}
-
-APPLICATION_STATUSES = {
-    "saved",
-    "ready_to_apply",
-    "applied",
-    "hr_read",
-    "resume_requested",
-    "screening",
-    "assessment",
-    "written_test",
-    "interview_1",
-    "interview_2",
-    "final_interview",
-    "offer",
-    "rejected",
-    "withdrawn",
-    "no_response",
-}
-
-SUBMITTED_APPLICATION_STATUSES = APPLICATION_STATUSES - {
-    "saved",
-    "ready_to_apply",
-}
-
-APPLICATION_STAGE_RANK = {
-    "saved": 0,
-    "ready_to_apply": 1,
-    "applied": 2,
-    "hr_read": 3,
-    "resume_requested": 4,
-    "screening": 5,
-    "assessment": 6,
-    "written_test": 6,
-    "interview_1": 7,
-    "interview_2": 8,
-    "final_interview": 9,
-    "offer": 10,
-}
-
-TERMINAL_APPLICATION_STATUSES = {"rejected", "withdrawn", "no_response"}
 
 
 class JobDatabaseError(RuntimeError):
@@ -388,6 +316,23 @@ class JobRepository:
                         REFERENCES applications(id) ON DELETE CASCADE,
                     debrief_hash TEXT NOT NULL UNIQUE,
                     payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK(kind IN ('oa', 'interview')),
+                    at TEXT NOT NULL,
+                    url TEXT NOT NULL DEFAULT '',
+                    completed INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(job_id, kind, at)
+                );
+                CREATE TABLE IF NOT EXISTS tracking_requests (
+                    request_id TEXT PRIMARY KEY,
+                    payload_hash TEXT NOT NULL,
+                    response_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
 
@@ -826,6 +771,27 @@ class JobRepository:
             else:
                 connection.execute("DELETE FROM archived_jobs WHERE job_id = ?", (job_id,))
 
+    def list_job_ids(self) -> list[int]:
+        self.initialize()
+        with self._connection() as connection:
+            return [int(row[0]) for row in connection.execute("SELECT id FROM jobs ORDER BY id")]
+
+    def match_refresh_inputs(self) -> list[dict]:
+        self.initialize()
+        with self._connection() as connection:
+            return [dict(row) for row in connection.execute("""
+                SELECT j.id, j.company, j.title, j.location, j.jd_text,
+                       s.platform, s.source_url, m.result_json
+                FROM jobs j
+                LEFT JOIN job_sources s ON s.id = (
+                    SELECT id FROM job_sources WHERE job_id=j.id
+                    ORDER BY last_seen_at DESC, id DESC LIMIT 1)
+                LEFT JOIN match_results m ON m.id = (
+                    SELECT id FROM match_results WHERE job_id=j.id
+                    ORDER BY created_at DESC, id DESC LIMIT 1)
+                ORDER BY j.id
+            """)]
+
     def list_jobs(self, *, limit: int = 20) -> list[JobListItem]:
         self.initialize()
         with self._connection() as connection:
@@ -1150,7 +1116,24 @@ class JobRepository:
         return insights
 
     def record_application_status(
+        self, job_id: int, status: ApplicationStatus, *, source: str,
+        detail: str = '', resume_path: str | None = None,
+        application_pack_path: str | None = None, source_url: str | None = None,
+        verification_method: str = '', evidence_path: str | None = None,
+        allow_regression: bool = False,
+    ) -> bool:
+        self.initialize()
+        with self._connection() as connection:
+            return self._record_application_status(
+                connection, job_id, status, source=source, detail=detail,
+                resume_path=resume_path, application_pack_path=application_pack_path,
+                source_url=source_url, verification_method=verification_method,
+                evidence_path=evidence_path, allow_regression=allow_regression,
+            )
+
+    def _record_application_status(
         self,
+        connection: sqlite3.Connection,
         job_id: int,
         status: ApplicationStatus,
         *,
@@ -1165,11 +1148,10 @@ class JobRepository:
     ) -> bool:
         """Upsert current application state and append an event only on change."""
 
-        self.initialize()
         if status not in APPLICATION_STATUSES:
             raise JobDatabaseError(f"不支持的投递状态: {status}")
         now = _utc_now()
-        with self._connection() as connection:
+        with nullcontext(connection) as connection:
             job_exists = connection.execute(
                 "SELECT 1 FROM jobs WHERE id = ?",
                 (job_id,),
@@ -1275,6 +1257,82 @@ class JobRepository:
                 (status, now, job_id),
             )
         return changed
+
+    def apply_tracking_update(self, payload: dict) -> dict:
+        """Commit confirmed status, audit event, reminder and retry key atomically."""
+        if payload.get('confirmed') is not True:
+            raise ValueError('请先确认识别结果。')
+        job_id = payload.get('job_id')
+        if type(job_id) is not int or job_id <= 0:
+            raise ValueError('请选择有效岗位。')
+        request_id = payload.get('request_id')
+        if not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', request_id):
+            raise ValueError('缺少有效的重试标识。')
+        aliases = {'oa_pending': 'assessment', 'interview_scheduled': 'interview_1', 'offered': 'offer'}
+        raw_status = payload.get('status')
+        if not isinstance(raw_status, str):
+            raise ValueError('请选择流转状态。')
+        status = aliases.get(raw_status, raw_status)
+        if status not in APPLICATION_STATUSES:
+            raise ValueError('不支持的流转状态。')
+        event = payload.get('event')
+        clean_event = None
+        if event is not None:
+            if not isinstance(event, dict) or event.get('kind') not in {'oa', 'interview'}:
+                raise ValueError('日程类型无效。')
+            if (event['kind'] == 'oa' and status not in {'assessment', 'written_test'}) or (event['kind'] == 'interview' and status not in {'interview_1', 'interview_2', 'final_interview'}):
+                raise ValueError('日程类型与岗位状态不一致。')
+            try:
+                at = datetime.fromisoformat(event.get('at', ''))
+            except (ValueError, TypeError):
+                raise ValueError('请确认包含时区的完整日程时间。') from None
+            if at.tzinfo is None or at.utcoffset() is None:
+                raise ValueError('请确认包含时区的完整日程时间。')
+            url = event.get('url') or ''
+            if not isinstance(url, str) or len(url) > 4000 or any(c.isspace() or ord(c) < 32 for c in url):
+                raise ValueError('日程链接无效。')
+            if url:
+                if not safe_public_url(url):
+                    raise ValueError('日程链接必须是有效的公共 HTTP(S) 地址。')
+            clean_event = {'kind': event['kind'], 'at': at.astimezone(UTC).isoformat(timespec='seconds'), 'url': url}
+        normalized = {'job_id': job_id, 'status': status, 'event': clean_event}
+        digest = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+        self.initialize()
+        with self._connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            prior = connection.execute('SELECT payload_hash, response_json FROM tracking_requests WHERE request_id = ?', (request_id,)).fetchone()
+            if prior:
+                if prior['payload_hash'] != digest:
+                    raise ValueError('同一个重试标识不能用于不同内容。')
+                return {**json.loads(prior['response_json']), 'duplicate': True}
+            changed = self._record_application_status(connection, job_id, status, source='confirmed_notification', verification_method='user_confirmed')
+            if status in {'rejected', 'withdrawn', 'offer'}:
+                connection.execute('UPDATE tracking_reminders SET completed = 1 WHERE job_id = ?', (job_id,))
+            reminder_id = None
+            if clean_event:
+                # A new invitation need not replace an earlier round or deadline.
+                # Keep distinct times until the user explicitly completes them.
+                connection.execute('INSERT INTO tracking_reminders(job_id,kind,at,url,created_at) VALUES (?,?,?,?,?) ON CONFLICT(job_id,kind,at) DO UPDATE SET url=excluded.url, completed=0', (job_id, clean_event['kind'], clean_event['at'], clean_event['url'], _utc_now()))
+                reminder_id = connection.execute('SELECT id FROM tracking_reminders WHERE job_id=? AND kind=? AND at=?', (job_id, clean_event['kind'], clean_event['at'])).fetchone()['id']
+            result = {'ok': True, 'duplicate': False, 'changed': changed, 'reminder_id': reminder_id}
+            connection.execute('INSERT INTO tracking_requests VALUES (?,?,?,?)', (request_id, digest, json.dumps(result), _utc_now()))
+            return result
+
+    def tracking_board(self) -> dict:
+        self.initialize()
+        with self._connection() as connection:
+            jobs = [dict(row) for row in connection.execute('SELECT j.id AS job_id, j.company, j.title, COALESCE(a.status,j.status) AS status FROM jobs j LEFT JOIN applications a ON a.job_id=j.id WHERE j.id NOT IN (SELECT job_id FROM archived_jobs) ORDER BY j.updated_at DESC, j.id DESC')]
+            reminders = [dict(row) for row in connection.execute("SELECT r.id,r.job_id,j.company,j.title,r.kind,r.at,r.url,r.completed,r.created_at FROM tracking_reminders r JOIN jobs j ON j.id=r.job_id LEFT JOIN applications a ON a.job_id=j.id WHERE r.completed=0 AND COALESCE(a.status,j.status) NOT IN ('rejected','withdrawn','offer') AND j.id NOT IN (SELECT job_id FROM archived_jobs) ORDER BY r.at,r.id")]
+            for item in reminders:
+                item['completed'] = bool(item['completed'])
+            return {'jobs': jobs, 'reminders': reminders}
+
+    def complete_tracking_reminder(self, reminder_id: int) -> None:
+        self.initialize()
+        with self._connection() as connection:
+            result = connection.execute('UPDATE tracking_reminders SET completed=1 WHERE id=?', (reminder_id,))
+            if not result.rowcount:
+                raise ValueError('日程不存在。')
 
     def update_application_verification(
         self,

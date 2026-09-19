@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from job_agent import __version__
+from job_agent.services.profile_store import write_text_atomic
 
 
 APP_TITLE = "个人求职 Agent"
@@ -184,9 +185,9 @@ def desktop_smoke_test(data_root: Path, report_path: Path | None = None) -> Path
     target = report_path or data_root / "logs" / "desktop-smoke-test.json"
     target = target.expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
+    write_text_atomic(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+        target,
     )
     return target
 

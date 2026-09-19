@@ -612,6 +612,7 @@ def build_tailored_resume_draft(
         docx_path = temporary / f"{safe_name}-{safe_role}-自动STAR草稿.docx"
         pdf_path = temporary / f"{safe_name}-{safe_role}-自动STAR草稿.pdf"
         manifest_path = temporary / "resume-version-auto-star.json"
+        # 已通过目录级 replace 保证原子性
         content_path.write_text(
             json.dumps(content, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -702,6 +703,7 @@ def build_tailored_resume_draft(
                 ),
             },
         }
+        # 已通过目录级 replace 保证原子性
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

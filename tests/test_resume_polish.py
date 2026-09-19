@@ -237,7 +237,7 @@ class ResumePolishTests(unittest.TestCase):
         self.assertIn("数据运营", merged["summary"])
         self.assertEqual(merged["experience_sections"][0]["title"], "工作经历")
         bullets = merged["experience_sections"][0]["entries"][0]["bullets"]
-        self.assertEqual({bullet["label"] for bullet in bullets}, {"工作业绩"})
+        self.assertEqual({bullet["label"] for bullet in bullets}, {"数据处理", "流程支持"})
         self.assertEqual(
             [set(re.findall(r"\d+(?:\.\d+)?", bullet["text"])) for bullet in bullets],
             [{"30"}, {"5"}],

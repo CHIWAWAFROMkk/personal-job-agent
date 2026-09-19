@@ -160,14 +160,12 @@ def render_reference_pdf(content: dict, spec: dict, path: Path, photo: Path | No
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from job_agent.services.pdf_fonts import resume_pdf_font
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, HRFlowable, Image
     from reportlab.lib.utils import ImageReader
 
-    font = "STSong-Light"
+    font = resume_pdf_font()
     compact = content.get("layout_density") == "compact"
-    if font not in pdfmetrics.getRegisteredFontNames():
-        pdfmetrics.registerFont(UnicodeCIDFont(font))
     base = ParagraphStyle("reference-body", fontName=font, fontSize=spec["parts"]["bullet"]["size_pt"], leading=spec["parts"]["bullet"]["leading_pt"], spaceAfter=1 if compact else 2, wordWrap="CJK")
     styles = {"text": base,
               "section": ParagraphStyle("reference-section", parent=base, fontSize=12, leading=17, spaceBefore=4 if compact else 6, spaceAfter=2 if compact else 3, keepWithNext=True),

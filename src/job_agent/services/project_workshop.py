@@ -56,6 +56,7 @@ def _write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_bytes(data)
+    # 已通过临时文件 replace 保证原子性
     temporary.replace(path)
 
 

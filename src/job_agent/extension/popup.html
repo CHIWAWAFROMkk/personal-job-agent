@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>求职伴侣</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+<!-- Operate: extend Aurora/Cosmic with an explicit review-before-fill flow.
+     Current page first; one primary action per step. Opaque reading areas, soft control surfaces. -->
+<header><h1>求职伴侣</h1><span id="platformBadge">网页</span></header>
+<p id="pageHost" class="muted">正在连接当前页…</p>
+<section aria-labelledby="fillHeading"><h2 id="fillHeading">辅助填写</h2>
+  <label for="jobId">工作台岗位编号</label>
+  <div class="row"><input id="jobId" inputmode="numeric" type="text" placeholder="例如 12"><button id="loadFillBtn">读取档案</button></div>
+  <p class="muted">仅预填客观空白字段。登录、附件、筛选问题和最终提交由你完成。</p>
+  <div id="fillReview" hidden><h3>确认发送到此网页</h3><dl id="fillFields"></dl><p id="attachmentNote" class="muted"></p>
+    <p class="warning">静默预填不会触发输入事件。部分网站需要你手动重输一次才会识别；请检查后再继续。</p>
+    <button id="confirmFillBtn" class="primary">确认预填当前页</button>
+  </div>
+  <button id="otpBtn">接收此页验证码</button>
+  <p class="muted">先在网页聚焦短信验证码框，再点此按钮。然后到工作台录入验证码；连接保留 2 分钟。不支持图形验证码、滑块或分格输入。</p>
+  <p id="fillStatus" role="status" aria-live="polite"></p>
+</section>
+<details><summary>收录当前岗位</summary><h2 id="jobTitle">正在识别…</h2><p id="jobMeta" class="muted"></p><p id="jobJd" class="jd-preview"></p><button id="sendBtn" disabled>收录到工作台</button><p id="statusMsg" role="status"></p></details>
+<details><summary>本地连接设置</summary><label for="serverUrl">工作台地址</label><input id="serverUrl" type="url" value="http://127.0.0.1:8787"><label for="agentToken">Agent Token</label><input id="agentToken" type="password" autocomplete="off" placeholder="从工作台设置复制"><p class="muted">密钥只存于扩展本机存储，不发送到招聘网页。</p></details>
+<script src="safety.js"></script><script src="popup.js"></script>
+</body></html>

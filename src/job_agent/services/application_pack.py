@@ -855,6 +855,7 @@ def write_application_pack(
         materials = temporary / "投递材料.md"
         jd_text = temporary / "JD.txt"
         match_json = temporary / "match-result.json"
+        # 已通过目录级 replace 保证原子性
         pack_json.write_text(pack.model_dump_json(indent=2) + "\n", encoding="utf-8")
         materials.write_text(render_application_pack_markdown(pack), encoding="utf-8")
         jd_text.write_text(job.jd_text.rstrip() + "\n", encoding="utf-8")

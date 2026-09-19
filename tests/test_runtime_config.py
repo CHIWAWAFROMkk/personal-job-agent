@@ -17,6 +17,7 @@ from job_agent.services.runtime_config import (
 
 
 RELEVANT_ENV = {
+    "DEEPSEEK_API_KEY": "",
     "OPENAI_API_KEY": "",
     "JOB_AGENT_AI_API_KEY": "",
     "JOB_AGENT_AI_PROVIDER": "",

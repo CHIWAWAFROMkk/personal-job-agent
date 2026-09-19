@@ -13,7 +13,7 @@ from pathlib import Path
 from job_agent.models.job import MatchResult, MatchStatus
 from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import EvidenceFact, Experience, ExperienceKind, Profile
-from job_agent.services.resume_render import format_resume_target, resume_section_title, suggest_self_evaluation
+from job_agent.services.resume_render import format_resume_target, resume_section_title
 
 
 class PortableResumeError(RuntimeError):
@@ -70,6 +70,7 @@ def save_profile_photo(private_dir: Path, data: bytes) -> Path:
     target = photo_dir / f"profile-photo{extension}"
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_bytes(data)
+    # 已通过临时文件 replace 保证原子性
     temporary.replace(target)
     return target
 
@@ -150,6 +151,7 @@ def _selected_experiences(
             "excel", "vlookup", "数据透视表", "sql", "python", "数据", "统计",
             "分析", "清洗", "可视化", "报表", "日报", "周报", "运营", "业务",
             "调研", "问卷", "报告", "研究", "招聘", "人才", "hr", "员工", "档案", "沟通", "活动",
+            "内容", "文案", "公众号", "新媒体", "用户", "社群", "产品", "需求", "测试", "自动化", "ai",
     )
 
     def relevance(fact: EvidenceFact) -> int:
@@ -159,8 +161,7 @@ def _selected_experiences(
     for experience, fact in ranked:
         grouped.setdefault(experience.id, (experience, []))[1].append(fact)
     values = list(grouped.values())
-    relevant = [item for item in values if any(relevance(fact) for fact in item[1])]
-    values = relevant or values
+    # Relevance determines order, not whether a whole verified experience exists.
     values.sort(
         key=lambda item: (
             item[0].kind not in _WORK_KINDS,
@@ -170,9 +171,17 @@ def _selected_experiences(
     )
     selected = []
     budget = 10
-    for experience, facts in values[:4]:
-        limit = min(4 if experience.kind in _WORK_KINDS else 2, budget)
-        ordered = sorted(facts, key=lambda fact: -relevance(fact))
+    candidates = values[:5]
+    for position, (experience, facts) in enumerate(candidates):
+        reserved = len(candidates) - position - 1
+        limit = min(4 if experience.kind in _WORK_KINDS else 2, budget - reserved)
+        ordered = []
+        seen_text = set()
+        for fact in sorted(facts, key=lambda fact: -relevance(fact)):
+            key = re.sub(r"\s+", "", fact.statement)
+            if key not in seen_text:
+                ordered.append(fact)
+                seen_text.add(key)
         picked = ordered[:limit]
         outcomes = [fact for fact in ordered if fact.metrics or any(term in fact.statement for term in ("获得", "成绩", "认可"))]
         # Preserve a real outcome beside the strongest action; unrelated awards do not win selection.
@@ -264,6 +273,17 @@ def build_portable_resume_content(
     identity = "；".join(summary_parts) if summary_parts else ""
     # 求职意向由模板的目标行呈现；摘要只写个人优势，不堆"期望产出"类空话
     summary = (identity + "。") if identity else f"应聘{job.title}。"
+    # Prefer actual actions/deliverables over a list of school/company names.
+    evidence_summary = []
+    for _, facts in selected:
+        if facts:
+            statement = facts[0].statement.strip()
+            if statement not in evidence_summary and len("；".join(evidence_summary + [statement])) <= 200:
+                evidence_summary.append(statement)
+        if len(evidence_summary) == 2:
+            break
+    if evidence_summary:
+        summary = "；".join(s.rstrip("。；") for s in evidence_summary) + "。"
 
     work_entries: list[dict[str, object]] = []
     internship_entries: list[dict[str, object]] = []
@@ -323,13 +343,22 @@ def build_portable_resume_content(
             "generated_at": generated_at.isoformat(),
         },
         "summary": summary,
-        "self_evaluation": suggest_self_evaluation({"skills": skills, "experience_sections": sections}),
+        # The summary already introduces skills and experience. Leave this
+        # optional section empty unless the user supplies distinct content.
+        "self_evaluation": "",
         "skills": skills,
         "availability": profile.job_search.availability.model_dump(mode="json"),
         "highlights": [{"text": fact.statement, "fact_ids": [fact.id]}
                        for experience in profile.experiences if experience.kind == ExperienceKind.OTHER
                        for fact in experience.facts if profile.is_application_ready(fact.status)][:3],
         "experience_sections": sections,
+        "selection": {
+            "protected_experience_ids": [experience.id for experience, _ in selected],
+            "omitted_experience_ids": [e.id for e in profile.experiences
+                if e.kind != ExperienceKind.OTHER and any(profile.is_application_ready(f.status) for f in e.facts)
+                and e.id not in {selected_e.id for selected_e, _ in selected}],
+            "policy": "按JD排序；最多五段、十条事实，先保留经历覆盖，再分配细节。",
+        },
         "education": education,
         "truthfulness": {
             "confirmed_fact_ids": [
@@ -488,14 +517,10 @@ def _write_pdf(content: dict[str, object], path: Path, photo: Path | None) -> in
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
     from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from job_agent.services.pdf_fonts import resume_pdf_font
     from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-    font_name = "STSong-Light"
-    try:
-        pdfmetrics.getFont(font_name)
-    except KeyError:
-        pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+    font_name = resume_pdf_font()
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "ResumeTitle",
@@ -687,6 +712,10 @@ def _write_pdf_from_docx(docx_path: Path, pdf_path: Path) -> int | None:
     import os
     import subprocess
     from pypdf import PdfReader
+    # Native Office can retain COM/file locks after a timeout. Keep normal
+    # exports deterministic and local; use Office only by explicit opt-in.
+    if os.environ.get("JOB_AGENT_USE_OFFICE_PDF", "").strip().lower() not in {"1", "true"}:
+        return None
     if os.name != "nt" or not shutil.which("pwsh"):
         return None
     # Isolate COM conversion with a deadline; never close the user's other documents.
@@ -747,6 +776,7 @@ def _render_resume_version(
         docx_path = temporary / "岗位专属简历草稿.docx"
         pdf_path = temporary / "岗位专属简历草稿.pdf"
         manifest_path = temporary / "resume-version-portable.json"
+        # 已通过目录级 replace 保证原子性
         content_path.write_text(
             json.dumps(content, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -779,6 +809,7 @@ def _render_resume_version(
                 from job_agent.services.resume_reference_layout import render_reference_pdf
                 pdf_pages = render_reference_pdf(content, spec, pdf_path, photo)
                 pdf_engine = "local_renderer"
+            # 已通过目录级 replace 保证原子性
             content_path.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if pdf_pages != 1:
             raise PortableResumeError(
@@ -833,6 +864,7 @@ def _render_resume_version(
             manifest.update(extra_manifest)
         if extra_qa:
             manifest["qa"].update(extra_qa)
+        # 已通过目录级 replace 保证原子性
         manifest_path.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",

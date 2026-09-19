@@ -100,8 +100,8 @@ class PortableResumeTests(unittest.TestCase):
         # 摘要必须是可投递的求职语言，不得包含内部流程提示
         self.assertNotIn("需由本人", content["summary"])
         self.assertNotIn("本地事实", content["summary"])
-        self.assertIn("在读", content["summary"])
-        self.assertIn("积累实践经验", content["summary"])
+        self.assertIn("SQL", content["summary"])
+        self.assertIn("清洗业务数据", content["summary"])
         # 空话套话不得进入摘要
         self.assertNotIn("期望把上述能力", content["summary"])
         # 匹配分属内部排序数据，不得出现在投递简历正文

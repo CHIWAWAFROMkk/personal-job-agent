@@ -128,6 +128,7 @@ class MatchResult(StrictModel):
     unknowns: list[str] = Field(default_factory=list)
     scoring_version: str = "phase1-v1"
     engine: str
+    input_fingerprint: str | None = None
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")

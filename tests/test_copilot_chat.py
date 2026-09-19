@@ -22,6 +22,21 @@ JD = "负责 SQL 数据分析与运营策略；要求本科，每周到岗四天
 
 
 class CopilotChatTests(unittest.TestCase):
+    def test_history_survives_save_beyond_sixty_messages(self):
+        from job_agent.models.copilot import CopilotMessage
+        from job_agent.services.copilot_chat import save_copilot_thread
+
+        thread = load_copilot_thread(self.thread_path)
+        thread.messages = [
+            CopilotMessage(message_id=str(i), role="user", content=f"测试消息 {i}")
+            for i in range(80)
+        ]
+        save_copilot_thread(thread, self.thread_path)
+        restored = load_copilot_thread(self.thread_path)
+        self.assertEqual(restored.messages, thread.messages)
+        save_copilot_thread(restored, self.thread_path)
+        self.assertEqual(len(load_copilot_thread(self.thread_path).messages), 80)
+
     def test_experience_templates_are_advice_without_resume_write_actions(self):
         snapshot = respond_to_copilot(
             "分析我的简历，给我经历写作模板，并优化写法",
@@ -42,6 +57,8 @@ class CopilotChatTests(unittest.TestCase):
         self.thread_path = self.private / "copilot" / "current-thread.json"
         self.runtime_path = self.private / "app-settings.json"
         self.usage_path = self.private / "api-usage.json"
+        from job_agent.services.runtime_config import RuntimeConfig, AIConnectorConfig, save_runtime_config
+        save_runtime_config(RuntimeConfig(ai=AIConnectorConfig(provider="local")), self.runtime_path)
         save_profile(sample_profile(), self.profile_path)
         self.repository = JobRepository(self.private / "jobs.sqlite3")
         record = self.repository.upsert_job(

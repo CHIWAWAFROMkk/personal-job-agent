@@ -47,6 +47,20 @@ class ResumeComposeTests(unittest.TestCase):
         self.assertNotIn("original_path", rendered)
         self.assertEqual(result.content["generation"]["engine"], "cloud_composition")
 
+    def test_protected_experience_is_restored_when_model_omits_it(self):
+        experience = self.profile.experiences[0]
+        fact = next(f for f in experience.facts if self.profile.is_application_ready(f.status))
+        self.content['selection'] = {'protected_experience_ids': [experience.id]}
+        self.content['experience_sections'] = [{'title':'实习经历','entries':[{
+            'experience_id':experience.id,'organization':experience.organization,
+            'role':experience.role,'dates':'','context':'',
+            'bullets':[{'label':'数据处理','text':fact.statement,'fact_ids':[fact.id]}]}]}]
+        result, _ = self.compose()
+        entries=[e for s in result.content['experience_sections'] for e in s['entries']]
+        self.assertIn(experience.id,[e['experience_id'] for e in entries])
+        self.assertIn(experience.id,result.content['generation']['restored_experience_ids'])
+        self.assertIn(fact.id,result.content['truthfulness']['confirmed_fact_ids'])
+
     def test_rejects_wrong_experience_unconfirmed_facts_numbers_and_skill_invention(self):
         for key, value in (("fact_ids", ["fact-sql-analysis"]), ("fact_ids", ["fact-pending-tableau"]),
                            ("text", "整理1000份有效答卷。"), ("text", "整理100%有效答卷。"),

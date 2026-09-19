@@ -11,7 +11,7 @@ from job_agent.models.base import StrictModel
 from job_agent.services.profile_store import write_json_atomic
 
 
-AIProviderId = Literal["local", "codex", "openai", "openai_compatible"]
+AIProviderId = Literal["local", "codex", "openai", "openai_compatible", "deepseek"]
 SearchProviderId = Literal["none", "bocha", "brave"]
 MapProviderId = Literal["none", "amap"]
 
@@ -77,6 +77,10 @@ class AIConnectorConfig(StrictModel):
             normalized["model"] = str(normalized.get("model") or "codex-default")
         elif provider == "openai":
             normalized["base_url"] = None
+            normalized["model"] = str(normalized.get("model") or "gpt-4o")
+        elif provider == "deepseek":
+            normalized["base_url"] = normalized.get("base_url") or "https://api.deepseek.com"
+            normalized["model"] = str(normalized.get("model") or "deepseek-chat")
         return normalized
 
     @model_validator(mode="after")
@@ -220,15 +224,23 @@ def update_runtime_config(path: Path, update: RuntimeConfigUpdate) -> RuntimeCon
 
 
 def _environment_runtime_config() -> RuntimeConfig:
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     ai_provider = os.getenv("JOB_AGENT_AI_PROVIDER", "").strip().casefold()
-    if ai_provider not in {"local", "codex", "openai", "openai_compatible"}:
-        ai_provider = "openai" if openai_key else "local"
+    if ai_provider not in {"local", "codex", "openai", "openai_compatible", "deepseek"}:
+        ai_provider = "deepseek" if deepseek_key else "openai" if openai_key else "local"
     ai_model = os.getenv("JOB_AGENT_AI_MODEL", os.getenv("OPENAI_MODEL", "")).strip()
     if not ai_model:
-        ai_model = "gpt-5.6-luna" if ai_provider != "local" else "local-explainable-v1"
-    ai_key = os.getenv("JOB_AGENT_AI_API_KEY", "").strip() or openai_key
-    ai_base_url = os.getenv("JOB_AGENT_AI_BASE_URL", "").strip() or None
+        if ai_provider == "deepseek":
+            ai_model = "deepseek-chat"
+        elif ai_provider == "codex":
+            ai_model = "codex-default"
+        elif ai_provider != "local":
+            ai_model = "gpt-4o"
+        else:
+            ai_model = "local-explainable-v1"
+    ai_key = os.getenv("JOB_AGENT_AI_API_KEY", "").strip() or (deepseek_key if ai_provider == "deepseek" else openai_key)
+    ai_base_url = os.getenv("JOB_AGENT_AI_BASE_URL", "").strip() or ("https://api.deepseek.com" if ai_provider == "deepseek" else None)
 
     bocha_key = os.getenv("BOCHA_API_KEY", "").strip()
     brave_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()

@@ -10,7 +10,7 @@ from job_agent.services.portable_resume import _write_pdf_from_docx
 @unittest.skipUnless(os.name == 'nt', 'Windows Office converter')
 class OfficePdfExportTests(unittest.TestCase):
     def test_office_timeout_leaves_time_for_local_rendering(self):
-        with patch('shutil.which', return_value='pwsh'), patch(
+        with patch.dict(os.environ, {'JOB_AGENT_USE_OFFICE_PDF': '1'}), patch('shutil.which', return_value='pwsh'), patch(
             'subprocess.run', side_effect=subprocess.TimeoutExpired('pwsh', 10)
         ) as run:
             result = _write_pdf_from_docx(Path('input.docx'), Path('output.pdf'))

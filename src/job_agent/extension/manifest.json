@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "求职 Agent · 岗位一键收录助手",
+  "version": "1.1.0",
+  "minimum_chrome_version": "106",
+  "background": { "service_worker": "background.js" },
+  "description": "在浏览 Boss直聘、牛客、实习僧、猎聘等招聘网页时，一键将岗位与 JD 结构化收录至本地个人求职 Agent 工作台。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

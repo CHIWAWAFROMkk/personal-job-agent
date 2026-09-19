@@ -16,6 +16,28 @@ class AIProviderError(RuntimeError):
     pass
 
 
+def get_openai_client(config):
+    """Build a bounded OpenAI-compatible client; never guess compatible model IDs."""
+    from openai import OpenAI
+
+    ai = config.ai
+    provider = ai.provider.strip().lower()
+    if provider not in {"openai", "deepseek", "openai_compatible"}:
+        raise AIProviderError("当前供应商不支持 OpenAI 兼容调用。")
+    if not ai.api_key:
+        raise AIProviderError("请先在设置中配置 API 密钥。")
+    model = (ai.model or "").strip()
+    base_url = ai.base_url or None
+    if provider == "deepseek":
+        model = model or "deepseek-chat"
+        base_url = base_url or "https://api.deepseek.com"
+    elif provider == "openai":
+        model = model or "gpt-4o"
+    elif not model or not base_url:
+        raise AIProviderError("兼容服务需要明确填写模型名称和服务地址。")
+    return OpenAI(api_key=ai.api_key, base_url=base_url, timeout=15.0, max_retries=0), model
+
+
 @dataclass(frozen=True)
 class CodexJobMatchProvider:
     model: str = "codex-default"
@@ -172,6 +194,12 @@ def build_job_match_provider(
         return CodexJobMatchProvider(model=model or "codex-default")
     if normalized == "openai":
         return OpenAIJobMatchProvider(model=model, api_key=api_key)
+    if normalized == "deepseek":
+        return OpenAICompatibleJobMatchProvider(
+            model=model or "deepseek-chat",
+            base_url=base_url or "https://api.deepseek.com",
+            api_key=api_key,
+        )
     if normalized in {"openai_compatible", "openai-compatible", "compatible"}:
         if not base_url:
             raise AIProviderError("OpenAI 兼容 Provider 必须配置服务地址。")

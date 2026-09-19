@@ -18,14 +18,22 @@ def safe_ai_error_message(
         status = None
 
     compatible = provider == "openai_compatible"
-    service = "OpenAI 兼容服务" if compatible else "OpenAI"
+    if provider == "deepseek":
+        service = "DeepSeek"
+    elif compatible:
+        service = "OpenAI 兼容服务"
+    else:
+        service = "OpenAI"
+
     if status == 401:
         guidance = (
             "请核对服务地址、该服务商的 API Key 与模型名称是否属于同一个平台。"
             if compatible
-            else "请在“连接与 API”中重新填写由 OpenAI Platform 创建且仍有效的 API Key。"
+            else "请在“连接与 API”中重新填写仍有效的 API Key。"
         )
         return f"{service} 身份验证失败（401），本次{action}未调用成功。{guidance}"
+    if status == 402:
+        return f"{service} 账户余额不足（402），本次{action}未调用成功。请前往服务商平台充值后重试。"
     if status == 403:
         return f"{service} 拒绝访问（403）。请检查账户权限、项目权限或服务地区后重试。"
     if status == 404:

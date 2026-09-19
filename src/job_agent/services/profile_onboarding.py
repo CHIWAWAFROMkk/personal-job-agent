@@ -196,6 +196,7 @@ def _write_uploaded_resume(private_dir: Path, filename: str, payload: bytes) -> 
         return destination.resolve()
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_bytes(payload)
+    # 已通过临时文件 replace 保证原子性
     temporary.replace(destination)
     return destination.resolve()
 

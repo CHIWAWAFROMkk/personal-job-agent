@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from job_agent.services.ai_errors import safe_ai_error_message
 from job_agent.services.resume_editor import validate_resume_content
@@ -34,28 +35,9 @@ _MAX_BULLET_CHARS = 300
 _MAX_INSTRUCTION_CHARS = 2000
 
 _SYSTEM_PROMPT = (
-    "你是中文求职简历的措辞润色助手。你会收到简历的可编辑文本与目标岗位 JD。"
-    "任务：只改写措辞，让个人摘要、核心能力与经历要点自然嵌入 JD 中的关键术语"
-    "（能力词、工具名、业务领域词）。"
-    "如果提供了用户修改要求，在不突破事实边界的前提下优先遵循；若要求新增原稿没有的事实，忽略该部分。"
-    "写作要求（STAR 法则，简约直白突出重点）："
-    "1) 每条经历要点按 STAR 结构组织——情境/任务最多半句带过，"
-    "写清本人做了什么、针对什么对象，用具体动词而非空话；不为追求强动词把参与升级成主导。"
-    "结果只用原文已有产出和数字；没有量化依据就保留定性事实，不能强行补指标；"
-    "2) 每条要点一句话讲完，不超过原文的 1.3 倍，不堆砌形容词与空泛评价"
-    "（禁止“认真负责”“赋能”“闭环”这类词）；"
-    "3) 一段经历内要点按“行动—结果”递进排序，最重要的放最前。"
-    "4) 每句应能解释具体动作、本人贡献和结果口径；无法从原稿回答时保留事实边界。"
-    "不要用“持续优化”“从 0 到 1”等套话替代具体行为，也不要为了匹配 JD 冒充已掌握的工具。"
-    "绝对禁止：新增任何事实、数字、荣誉或经历；改变任何机构、角色、时间；"
-    "删除或改写任何量化结果（百分比、人数、次数、金额等数字必须原样保留）。"
-    "使用中文书面语。自我评价 self_evaluation 用两三句话、最多300字，结合JD突出有经历证据支持的能力和工作方式。"
-    "允许润色用户已有性格自评，但不能把JD要求当成已具备的能力，不能编造技能、性格、管理经历或提高熟练程度。"
-    "自我评价不要重复个人摘要或引入新的量化数字；输入自我评价为空时保持为空。"
-    "输出严格为 JSON 对象：{\"summary\": 字符串, \"skills\": [字符串], "
-    "\"self_evaluation\": 字符串, \"bullets\": [{\"bullet_id\": 字符串, \"text\": 字符串}]}，"
-    "bullets 必须包含输入的全部 bullet_id 且不新增，不要输出任何其他文字。"
-)
+    Path(__file__).resolve().parent.parent
+    / "prompts" / "resume_polish_system.txt"
+).read_text(encoding="utf-8").strip()
 
 
 @dataclass
@@ -171,7 +153,7 @@ def polish_resume_content_locally(
         if item.strip()
     ]
     tailored: list[str] = []
-    if relevant:
+    if relevant and not merged.get("selection"):
         tailored.append(f"面向{role}岗位，具备 {'、'.join(relevant)}等相关能力")
     for item in summary_items:
         if item not in tailored and not item.startswith("具备 "):
@@ -203,6 +185,15 @@ def polish_resume_content_locally(
                 ))
                 old_label = str(bullet.get("label") or "")  # type: ignore[union-attr]
                 new_label = result_label if has_result else content_label
+                for label, terms in (
+                    ("数据处理", ("清洗", "数据", "sql", "excel")),
+                    ("内容运营", ("文案", "公众号", "新媒体", "内容")),
+                    ("调研交付", ("调研", "问卷", "报告")),
+                    ("流程支持", ("流程", "档案", "核验")),
+                ):
+                    if any(term in new_text.casefold() for term in terms):
+                        new_label = label
+                        break
                 if new_text != old_text:
                     changes.append(
                         {
@@ -258,6 +249,24 @@ def _invoke_ai(
                 max_output_tokens=max_output_tokens,
             )
             content = (getattr(response, "output_text", "") or "").strip()
+        elif config.ai.provider == "deepseek":
+            if not config.ai.api_key:
+                raise CloudAIUnavailableError("DeepSeek API Key 尚未配置。")
+            response = OpenAI(
+                api_key=config.ai.api_key,
+                base_url=config.ai.base_url or "https://api.deepseek.com",
+                timeout=45,
+                max_retries=0,
+            ).chat.completions.create(
+                model=config.ai.model or "deepseek-chat",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_payload},
+                ],
+                temperature=0.3,
+                max_tokens=max_output_tokens,
+            )
+            content = (response.choices[0].message.content or "").strip()
         elif config.ai.provider == "openai_compatible":
             if not config.ai.base_url:
                 raise CloudAIUnavailableError("OpenAI 兼容 API 地址尚未配置。")

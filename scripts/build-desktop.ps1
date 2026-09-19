@@ -10,7 +10,7 @@ $desktopBuildRoot = Join-Path $desktopProjectRoot "build\desktop\$desktopBuildSt
 $desktopWorkRoot = Join-Path $desktopProjectRoot "build\pyinstaller\$desktopBuildStamp"
 $desktopDistRoot = Join-Path $desktopProjectRoot "dist\desktop\$desktopBuildStamp"
 $desktopProductRoot = Join-Path $desktopDistRoot "PersonalJobAgent"
-$desktopArchive = Join-Path $desktopProjectRoot "dist\PersonalJobAgent-0.8.3-Windows-x64-$desktopBuildStamp.zip"
+$desktopArchive = Join-Path $desktopProjectRoot "dist\PersonalJobAgent-0.8.4-Windows-x64-$desktopBuildStamp.zip"
 $desktopIcon = Join-Path $desktopBuildRoot "PersonalJobAgent.ico"
 
 if (-not (Test-Path -LiteralPath $desktopPython)) {
@@ -38,7 +38,7 @@ Set-Location -LiteralPath $desktopProjectRoot
 
 if (-not $SkipDependencyInstall) {
     Write-Host "Installing desktop build dependencies..."
-    & $desktopPython -m pip install --disable-pip-version-check --no-input --timeout 30 --retries 1 -e ".[desktop-build]"
+    & $desktopPython -m pip install --disable-pip-version-check --no-input --timeout 30 --retries 1 -e ".[desktop-build,browser-use]"
     if ($LASTEXITCODE -ne 0) { throw "Failed to install desktop build dependencies." }
 }
 
@@ -57,26 +57,35 @@ if ($LASTEXITCODE -ne 0) { throw "Failed to build the application icon." }
 
 $dashboardAssets = Join-Path $desktopProjectRoot "src\job_agent\web"
 $resumeTemplates = Join-Path $desktopProjectRoot "src\job_agent\templates"
+$agentPrompts = Join-Path $desktopProjectRoot "src\job_agent\prompts"
 $desktopEntry = Join-Path $desktopProjectRoot "src\job_agent\desktop.py"
 $desktopSource = Join-Path $desktopProjectRoot "src"
 
 Write-Host "Building standalone Windows application..."
-& $desktopPython -m PyInstaller `
-    --noconfirm `
-    --windowed `
-    --onedir `
-    --name PersonalJobAgent `
-    --icon $desktopIcon `
-    --paths $desktopSource `
-    --collect-submodules job_agent `
-    --collect-all webview `
-    --collect-all playwright `
-    --add-data "$dashboardAssets;job_agent/web" `
-    --add-data "$resumeTemplates;job_agent/templates" `
-    --distpath $desktopDistRoot `
-    --workpath $desktopWorkRoot `
-    --specpath $desktopBuildRoot `
-    $desktopEntry
+$pyinstallerArgs = @(
+    "--noconfirm",
+    "--windowed",
+    "--onedir",
+    "--name", "PersonalJobAgent",
+    "--icon", $desktopIcon,
+    "--paths", $desktopSource,
+    "--collect-submodules", "job_agent",
+    "--collect-all", "webview",
+    "--collect-all", "playwright",
+    "--add-data", "$dashboardAssets;job_agent/web",
+    "--add-data", "$resumeTemplates;job_agent/templates",
+    "--add-data", "$agentPrompts;job_agent/prompts",
+    "--distpath", $desktopDistRoot,
+    "--workpath", $desktopWorkRoot,
+    "--specpath", $desktopBuildRoot
+)
+
+$hasBrowserUse = & $desktopPython -c "import importlib.util; print(bool(importlib.util.find_spec('browser_use')))"
+if ($LASTEXITCODE -ne 0 -or $hasBrowserUse -ne "True") { throw "browser-use is required for this build; install the browser-use extra first." }
+$pyinstallerArgs += @("--collect-all", "browser_use")
+$pyinstallerArgs += $desktopEntry
+
+& $desktopPython -m PyInstaller @pyinstallerArgs
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller desktop build failed." }
 
 Copy-Item -LiteralPath (Join-Path $desktopProjectRoot "packaging\Start-PersonalJobAgent.cmd") -Destination $desktopProductRoot

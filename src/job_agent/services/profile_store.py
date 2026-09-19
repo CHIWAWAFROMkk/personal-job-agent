@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,19 +48,59 @@ def save_profile(
 
     profile.updated_at = datetime.now(UTC)
     payload = profile.model_dump_json(indent=2)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(payload + "\n", encoding="utf-8")
-    temporary.replace(path)
-    return path
+    return write_text_atomic(payload + "\n", path)
 
 
 def write_json_atomic(payload: object, path: Path) -> Path:
+    return write_text_atomic(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+        path,
+    )
+
+
+def write_text_atomic(content: str, path: Path, *, encoding: str = "utf-8") -> Path:
+    """Write *content* to *path* atomically via a temporary file."""
+    return _write_atomic(content, path, encoding=encoding)
+
+
+def write_bytes_atomic(data: bytes, path: Path) -> Path:
+    """Write *data* to *path* atomically via a temporary file."""
+    return _write_atomic(data, path)
+
+
+def _write_atomic(
+    content: str | bytes, path: Path, *, encoding: str | None = None
+) -> Path:
+    """Publish one complete write; concurrent writers use independent files.
+
+    This does not serialize read-modify-write operations: the last successful
+    replacement wins. The temporary file is closed before replacement on Windows.
+    """
     path = path.resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w" if isinstance(content, str) else "wb",
+            encoding=encoding,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+        for attempt in range(4):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError:
+                # Windows can briefly deny replacement during another replacement
+                # or a reader's open handle. Keep retries short and bounded.
+                if os.name != "nt" or attempt == 3:
+                    raise
+                time.sleep(0.01 * (2**attempt))
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return path

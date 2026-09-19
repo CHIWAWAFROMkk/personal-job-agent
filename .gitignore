@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 
 # Builds and local QA output
+bin/
 build/
 dist/
 work/
@@ -48,4 +49,8 @@ playwright/.auth/
 .DS_Store
 Thumbs.db
 desktop.ini
+output/
+evals/*.json
+scripts/launch_chrome_debug.bat
+debug_chrome.log
 

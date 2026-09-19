@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-job-agent"
-version = "0.8.3"
+version = "0.8.4"
 description = "A portable local-first job search agent for Windows"
 readme = "README.md"
 license = "MIT"
@@ -41,6 +41,9 @@ desktop-build = [
   "pillow>=11,<13",
   "pywebview>=6.1,<7",
 ]
+browser-use = [
+  "browser-use==0.13.10",
+]
 
 [project.scripts]
 job-agent = "job_agent.cli:main"
@@ -53,10 +56,12 @@ where = ["src"]
 job_agent = [
   "web/*.html",
   "web/*.css",
+  "web/js/*.js",
   "web/fonts/*.woff2",
   "web/fonts/*.md",
   "web/fonts/*.txt",
   "templates/*.json",
+  "prompts/*.txt",
 ]
 
 [tool.pytest.ini_options]
