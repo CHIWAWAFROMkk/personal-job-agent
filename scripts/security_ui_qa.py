@@ -15,7 +15,7 @@ def main():
     report = {}
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(channel='msedge')
             for width in (1266, 390):
                 page = browser.new_page(viewport={'width':width, 'height':850}, reduced_motion='reduce')
                 page.set_default_timeout(10000)
@@ -31,15 +31,20 @@ def main():
                 page.route('**/api/sms/setup', sms)
                 page.route('**/api/jobs/browser-use/status', lambda route: route.fulfill(json={'cdp_connected':False,'chrome_info':{}}))
                 page.goto(f'http://127.0.0.1:{server.server_port}', wait_until='networkidle')
-                page.locator('#workspaceNav').click()
+                if width <= 900:
+                    page.locator('#openDrawerButton').click()
+                    page.locator('[data-drawer-nav="workspace"]').click()
+                else:
+                    page.locator('#workspaceNav').click()
                 page.locator('.job-choice').first.click()
                 button = page.locator('[data-detail-action="browser-use-assist"]')
                 if not button.is_visible():
                     page.locator('.job-more summary').click()
                 button.click()
-                expect(page.locator('#buFactsStatus')).to_contain_text('仅展示当前档案')
+                expect(page.locator('#buFactsStatus')).to_contain_text('来自当前档案')
                 expect(page.locator('#buFactName')).not_to_have_text('待完善')
-                expect(page.locator('#smsCurrentBadge')).to_contain_text('123456')
+                expect(page.locator('#smsCurrentBadge')).to_have_text('已收到')
+                expect(page.locator('#buFactGpa')).to_have_text('待完善')
                 size = page.locator('#closeBrowserUseButton').bounding_box()
                 assert size['width'] >= 44 and size['height'] >= 44, {'size':size,'network':network_failures}
                 page.screenshot(path=str(output/f'{width}-preview.png'))
@@ -50,7 +55,7 @@ def main():
                 page.wait_for_timeout(10200)
                 assert len(calls) == initial_calls
                 assert page.locator('#smsWebhookUrlDisplay').inner_text() == '打开弹窗后读取安全链接'
-                page.locator('#openSettingsButton').click()
+                page.locator('#geminiProfileAvatarBtn').click()
                 page.locator('#copyAgentTokenButton').click()
                 expect(page.locator('#copyAgentTokenStatus')).to_contain_text('已复制')
                 assert page.evaluate('window.clipboardWasWritten')

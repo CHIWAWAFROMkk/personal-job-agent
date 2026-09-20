@@ -59,6 +59,16 @@ class SensitiveRoutesTests(unittest.TestCase):
                     self.assertNotIn("webhook_url", payload)
                     self.assertNotIn("facts", payload)
 
+    def test_unauthorized_json_has_explicit_byte_length(self):
+        request = urllib.request.Request(self.base + '/api/profile')
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=5)
+        with caught.exception as response:
+            body = response.read()
+            self.assertEqual(response.status, 403)
+            self.assertEqual(int(response.headers['Content-Length']), len(body))
+            self.assertIn('error', json.loads(body))
+
     def test_sensitive_routes_reject_foreign_origins_even_with_action_token(self):
         for path, method in [("/api/profile", "GET"), ("/api/agent/token", "POST"), ("/api/sms/setup", "POST")]:
             for origin in ["https://evil.example", "chrome-extension://synthetic", "moz-extension://synthetic", "null"]:

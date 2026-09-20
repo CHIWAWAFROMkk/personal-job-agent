@@ -172,9 +172,10 @@ def polish_resume_content_locally(
     for section in list(merged.get("experience_sections") or []):
         section_title = str(section.get("title") or "")  # type: ignore[union-attr]
         is_work = "工作" in section_title or "实习" in section_title
-        section["title"] = "工作经历" if is_work else "项目经历"  # type: ignore[index]
-        content_label = "工作内容" if is_work else "项目内容"
-        result_label = "工作业绩" if is_work else "项目业绩"
+        is_other = section_title in {"其他经历", "校园经历", "志愿经历"}
+        section["title"] = section_title if is_other else ("工作经历" if is_work else "项目经历")  # type: ignore[index]
+        content_label = "经历内容" if is_other else ("工作内容" if is_work else "项目内容")
+        result_label = "经历成果" if is_other else ("工作业绩" if is_work else "项目业绩")
         for entry in list(section.get("entries") or []):  # type: ignore[union-attr]
             for bullet_index, bullet in enumerate(entry.get("bullets") or []):  # type: ignore[union-attr]
                 old_text = str(bullet.get("text") or "")  # type: ignore[union-attr]

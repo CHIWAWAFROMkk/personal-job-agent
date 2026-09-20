@@ -21,7 +21,12 @@ def main():
                 base=f'http://127.0.0.1:{server.server_port}'
                 page.goto(base,wait_until='networkidle')
                 page.evaluate('(t)=>document.documentElement.dataset.theme=t',theme)
-                page.locator('#workspaceNav').click();page.locator('.job-choice').first.click()
+                if width <= 900:
+                    page.locator('#openDrawerButton').click()
+                    page.locator('[data-drawer-nav="workspace"]').click()
+                else:
+                    page.locator('#workspaceNav').click()
+                page.locator('.job-choice').first.click()
                 page.locator('[data-detail-tab="prep"]').first.click()
                 page.locator('#positionContent [data-detail-action="interview"]').click()
                 expect(page.locator('#mockDialog')).to_be_visible()

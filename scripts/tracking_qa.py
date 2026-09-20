@@ -24,7 +24,11 @@ def main():
                 base = f'http://127.0.0.1:{server.server_port}'
                 page.goto(base, wait_until='networkidle')
                 page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
-                page.locator('#overviewNav').click()
+                if width <= 900:
+                    page.locator('#openDrawerButton').click()
+                    page.locator('[data-drawer-nav="tracking"]').click()
+                else:
+                    page.locator('#overviewNav').click()
                 expect(page.locator('.tracking-job')).to_have_count(6)
                 page.locator('#trackingOpen').click()
                 at = datetime.now(timezone(timedelta(hours=8))) + timedelta(hours=24, minutes=index)

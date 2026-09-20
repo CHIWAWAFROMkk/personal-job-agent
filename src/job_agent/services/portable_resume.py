@@ -288,11 +288,12 @@ def build_portable_resume_content(
     work_entries: list[dict[str, object]] = []
     internship_entries: list[dict[str, object]] = []
     project_entries: list[dict[str, object]] = []
+    other_entries: list[dict[str, object]] = []
     for experience, facts in selected:
         entry = {
             "experience_id": experience.id,
             "experience_kind": experience.kind.value,
-            "organization": experience.organization,
+            "organization": experience.organization or "机构 / 项目名称待完善",
             "role": experience.role,
             "dates": _date_range(experience),
             "context": experience.summary.split("。")[0] if "派遣" in experience.summary else "",
@@ -309,6 +310,8 @@ def build_portable_resume_content(
             internship_entries.append(entry)
         elif experience.kind == ExperienceKind.EMPLOYMENT:
             work_entries.append(entry)
+        elif experience.kind == ExperienceKind.OTHER:
+            other_entries.append(entry)
         else:
             project_entries.append(entry)
     sections = []
@@ -318,6 +321,8 @@ def build_portable_resume_content(
         sections.append({"title": "工作经历", "entries": work_entries})
     if project_entries:
         sections.append({"title": "项目经历", "entries": project_entries})
+    if other_entries:
+        sections.append({"title": "其他经历", "entries": other_entries})
 
     contact = profile.person.contact
     return {

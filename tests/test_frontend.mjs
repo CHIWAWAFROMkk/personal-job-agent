@@ -38,6 +38,9 @@ test('dashboard entry and all imports link without duplicate or missing bindings
   const entry = await load(new URL('../src/job_agent/web/js/main.js', import.meta.url));
   await entry.link((name, parent) => load(new URL(name, parent.identifier)));
   assert.equal(entry.status, 'linked');
+  for (const module of ['resume-tailor.js', 'tracking.js', 'mock-interview.js', 'manual-code.js']) {
+    assert.ok([...modules.keys()].some(url => url.endsWith('/' + module)), `${module} must be wired into the dashboard`);
+  }
 });
 
 test('artifact links accept only application routes and reject executable or remote URLs', () => {

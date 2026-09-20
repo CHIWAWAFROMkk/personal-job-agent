@@ -45,6 +45,12 @@ def main():
                 page.keyboard.press('Escape')
                 assert not page.evaluate('document.documentElement.scrollWidth > innerWidth'), prefix
                 if width > 768:
+                    for nav_id, target in [('overviewNav', '#overviewTitle'), ('profileNav', '#openProfileButton')]:
+                        page.locator('#' + nav_id).click()
+                        expect(page.locator(target)).to_be_visible()
+                        assert page.locator('.page').evaluate('e=>getComputedStyle(e).zIndex') == '1'
+                        page.screenshot(path=str(output / f'{prefix}-{nav_id}.png'))
+                    expect(page.locator('#composerWaveBtn')).to_have_count(0)
                     expect(page.locator('#workspaceNav')).to_be_visible()
                     page.locator('#workspaceNav').click()
                     expect(page.locator('#jobWorkspace')).to_be_visible()

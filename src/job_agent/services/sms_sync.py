@@ -13,6 +13,7 @@ import secrets
 import re
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -152,10 +153,41 @@ class SmsWebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:
+        self._discard_small_rejected_body()
         self._send_json({"error": "Forbidden"}, 403)
 
     def do_GET(self) -> None:
+        self._discard_small_rejected_body()
         self._send_json({"error": "Not Found"}, status=404)
+
+    def _discard_small_rejected_body(self) -> None:
+        # Unread POST bytes can reset a Windows connection before its 403 is
+        # delivered. Discard only bounded bytes; never parse untrusted input.
+        lengths = self.headers.get_all("Content-Length", [])
+        if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
+            return
+        try:
+            length = int(lengths[0])
+        except ValueError:
+            return
+        if not 0 < length <= 8192:
+            return
+        previous_timeout = self.connection.gettimeout()
+        try:
+            deadline = time.monotonic() + 0.2
+            while length > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.connection.settimeout(remaining)
+                chunk = self.rfile.read1(length)
+                if not chunk:
+                    break
+                length -= len(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.connection.settimeout(previous_timeout)
 
     def do_POST(self) -> None:
         if urlsplit(self.path).path == "/api/sms/webhook":
@@ -165,6 +197,7 @@ class SmsWebhookHandler(BaseHTTPRequestHandler):
             if (self.headers.get("Origin") is not None or
                     self.headers.get("Sec-Fetch-Site", "") in {"cross-site", "same-site"} or
                     not expected or not hmac.compare_digest(supplied.encode(), expected.encode())):
+                self._discard_small_rejected_body()
                 self._send_json({"error": "Forbidden"}, 403)
                 return
             try:
@@ -215,6 +248,7 @@ class SmsWebhookHandler(BaseHTTPRequestHandler):
             record_sms(raw_text.strip(), sender=sender.strip())
             self._send_json({"ok": True})
         else:
+            self._discard_small_rejected_body()
             self._send_json({"error": "Not Found"}, status=404)
 
 

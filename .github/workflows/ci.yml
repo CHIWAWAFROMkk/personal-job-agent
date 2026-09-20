@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install --disable-pip-version-check --no-input --timeout 30 --retries 1 -e ".[dev,browser-use]"
       - name: Privacy audit
         run: python scripts/privacy_audit.py .
       - name: Tests
@@ -29,4 +29,7 @@ jobs:
       - name: Fixed synthetic benchmark
         run: python evals/run_baseline.py
       - name: Frontend module and request checks
-        run: node --experimental-vm-modules --test tests/test_frontend.mjs
+        shell: pwsh
+        run: |
+          $tests = @(Get-ChildItem -LiteralPath tests -Filter '*.mjs' | ForEach-Object FullName)
+          node --experimental-vm-modules --test @tests

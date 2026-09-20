@@ -1,4 +1,5 @@
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -18,7 +19,9 @@ from job_agent.services.runtime_config import (
     AIConnectorConfig,
     RuntimeConfig,
     RuntimeConfigError,
+    save_runtime_config,
 )
+from job_agent.services.profile_store import save_profile
 from tests.helpers import sample_profile
 
 
@@ -115,9 +118,14 @@ class BrowserUseAgentTests(unittest.TestCase):
 
         handler = MagicMock()
         handler._authorized_action.return_value = True
-        handler.runtime_config_path = Path("data/private/runtime_config.json")
-        handler.profile_path = Path("data/private/profile.json")
-        handler.output_dir = Path("output")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        handler.runtime_config_path = root / "runtime_config.json"
+        handler.profile_path = root / "profile.json"
+        handler.output_dir = root / "output"
+        save_profile(self.profile, handler.profile_path)
+        save_runtime_config(RuntimeConfig(ai=AIConnectorConfig(provider="local")), handler.runtime_config_path)
         handler.repository = MagicMock()
         handler.repository.get_job.return_value = self.job
 

@@ -6,6 +6,7 @@ import urllib.error
 import tempfile
 import socket
 from pathlib import Path
+from email.message import Message
 from unittest.mock import MagicMock
 
 from job_agent.services.sms_sync import (
@@ -19,10 +20,28 @@ from job_agent.services.sms_sync import (
     record_sms,
     start_sms_listener,
     stop_sms_listener,
+    SmsWebhookHandler,
 )
 
 
 class SmsSyncTests(unittest.TestCase):
+    def test_rejected_request_body_discard_is_bounded(self):
+        for length in ['2', '8193', '-1', 'invalid']:
+            handler = object.__new__(SmsWebhookHandler)
+            handler.headers = Message()
+            handler.headers['Content-Length'] = length
+            handler.rfile = MagicMock()
+            handler.rfile.read1.return_value = b'{}'
+            handler.connection = MagicMock()
+            handler.connection.gettimeout.return_value = 5
+            handler._discard_small_rejected_body()
+            if length == '2':
+                handler.rfile.read1.assert_called_once_with(2)
+                self.assertLessEqual(handler.connection.settimeout.call_args_list[0].args[0], 0.2)
+                self.assertEqual(handler.connection.settimeout.call_args_list[-1].args, (5,))
+            else:
+                handler.rfile.read1.assert_not_called()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.private_dir = Path(self.temp.name)

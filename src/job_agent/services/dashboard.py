@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 import webbrowser
 from datetime import UTC, date, datetime, timedelta, timezone
 from email import policy
@@ -394,7 +395,7 @@ def create_dashboard_server(
             self._headers(
                 status,
                 "application/json; charset=utf-8",
-                extra_headers=extra_headers,
+                extra_headers={**(extra_headers or {}), "Content-Length": str(len(body))},
             )
             self.wfile.write(body)
 
@@ -441,28 +442,14 @@ def create_dashboard_server(
                 hostname = None
             if hostname not in {"127.0.0.1", "localhost"}:
                 return False
-            origin = self.headers.get("Origin")
-            if origin:
-                if origin.startswith("chrome-extension://") or origin.startswith("moz-extension://"):
-                    pass
-                else:
-                    try:
-                        origin_parts = urlsplit(origin)
-                        origin_host = origin_parts.hostname
-                        origin_netloc = origin_parts.netloc
-                    except ValueError:
-                        return False
-                    if origin_parts.scheme != "http" or origin_host not in {
-                        "127.0.0.1",
-                        "localhost",
-                    }:
-                        return False
-                    if origin_netloc.casefold() != host.casefold():
-                        return False
+            origins = self.headers.get_all("Origin", [])
+            if len(origins) > 1 or (origins and origins[0] != "http://" + host):
+                return False
             supplied = self.headers.get("X-Job-Agent-Token", "")
             return bool(supplied) and secrets.compare_digest(supplied.encode("utf-8"), action_token.encode("utf-8"))
 
         def _reject_unauthorized_action(self) -> None:
+            self._discard_small_rejected_body()
             self.close_connection = True
             self._json(
                 {"error": "本地操作授权已过期，请刷新页面后重试。"},
@@ -474,6 +461,7 @@ def create_dashboard_server(
             supplied = self.headers.get("X-Agent-Token", "")
             return self._trusted_host() and bool(supplied) and secrets.compare_digest(supplied.encode("utf-8"), agent_token.encode("utf-8"))
         def _reject_unauthorized_agent(self) -> None:
+            self._discard_small_rejected_body()
             self.close_connection = True
             self._json(
                 {"error": "Agent Token 无效；请读取 data/private/agent-token.json。"},
@@ -494,6 +482,66 @@ def create_dashboard_server(
         do_PATCH = _method_not_allowed
         do_DELETE = _method_not_allowed
 
+        def _discard_small_rejected_body(self) -> None:
+            # A Windows socket closed with unread POST bytes can reset before
+            # the client receives the 403. Discard bounded bytes, never parse
+            # or execute them. Large/malformed/slow uploads are simply closed.
+            lengths = self.headers.get_all("Content-Length", [])
+            if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
+                return
+            try:
+                length = int(lengths[0])
+            except ValueError:
+                return
+            if not 0 < length <= 8192:
+                return
+            previous_timeout = self.connection.gettimeout()
+            try:
+                deadline = time.monotonic() + 0.2
+                while length > 0:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self.connection.settimeout(remaining)
+                    chunk = self.rfile.read1(length)
+                    if not chunk:
+                        break
+                    length -= len(chunk)
+            except (OSError, ValueError):
+                pass
+            finally:
+                self.connection.settimeout(previous_timeout)
+
+        def _request_source_allowed(self, method: str, path: str) -> bool:
+            """Browser-origin guard, not authentication against local processes.
+
+            Native CLI clients may omit these browser-controlled headers. A
+            privileged extension/local attacker able to do so is out of scope.
+            Agent credentials never grant access to the UI bootstrap or files.
+            """
+            origins = self.headers.get_all("Origin", [])
+            sites = self.headers.get_all("Sec-Fetch-Site", [])
+            if len(origins) > 1 or len(sites) > 1:
+                return False
+            origin = origins[0] if origins else None
+            same_origin = origin is None or origin == "http://" + self.headers.get("Host", "")
+            cross_site = bool(sites and sites[0].casefold() == "cross-site")
+            if same_origin and not cross_site:
+                return True
+            extension_origin = bool(origin and re.fullmatch(r"chrome-extension://[a-p]{32}", origin))
+            if origin is not None and not extension_origin:
+                return False
+            agent_endpoint = (
+                method == "GET" and bool(re.fullmatch(
+                    r"/api/(?:jobs/[0-9]+/fill-data|agent/(?:state|jobs(?:/[0-9]+)?|applications|candidates))", path
+                ))
+            ) or (
+                method == "POST" and path in {
+                    "/api/jobs/import-parsed", "/api/fill/session", "/api/fill/poll", "/api/fill/close",
+                }
+            )
+            return agent_endpoint and self._authorized_agent()
+
         def _dispatch_request(self, method: str) -> None:
             if not self._trusted_host():
                 self.close_connection = True
@@ -504,10 +552,16 @@ def create_dashboard_server(
             except ValueError:
                 self._json({"error": "请求地址格式不正确。"}, HTTPStatus.BAD_REQUEST)
                 return
+            if not self._request_source_allowed(method, path):
+                self._discard_small_rejected_body()
+                self.close_connection = True
+                self._json({"error": "请从本机工作台或已配对的伴侣扩展访问。"}, HTTPStatus.FORBIDDEN,
+                           extra_headers={"Connection": "close"})
+                return
             try:
                 if dispatch(self, method, path):
                     return
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 self.close_connection = True
                 return
             except Exception:

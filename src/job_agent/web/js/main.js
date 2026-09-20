@@ -1,6 +1,10 @@
 import { fetchLocal as fetch, readApiResponse } from './api.js';
 import { coalesceRefresh } from './state.js';
 import { elements } from './elements.js';
+import { createResumeTailor } from './resume-tailor.js';
+import { createTracking } from './tracking.js';
+import { createMockInterview } from './mock-interview.js';
+import { createManualCode } from './manual-code.js';
 import { renderProfile, prefillProfileForm, syncProfileRequirements, prefillPreferencesForm } from './profile.js';
 
 import {
@@ -351,6 +355,8 @@ import {
       $("jobWorkspace").hidden = view !== "jobs";
       $("overviewPanel").hidden = !["progress", "profile"].includes(view);
       $("overviewPanel").dataset.mode = view;
+      $("trackingHub").hidden = view !== "progress";
+      if (view === "progress") tracking.refresh();
       $("overviewTitle").textContent = view === "profile" ? "我的资料" : "投递进度";
       elements.queueButton.hidden = view === "profile";
       for (const [id, target] of [["todayNav","today"],["workspaceNav","jobs"],["overviewNav","progress"],["profileNav","profile"]]) {
@@ -771,6 +777,11 @@ import {
     }
 
     async function createResumeDraft(jobId) {
+      if (!activeProfile?.confirmed_fact_count) {
+        showError("请先在个人资料中录入并确认真实经历，再生成岗位简历。照片可选。");
+        elements.openProfileButton.click();
+        return false;
+      }
       if (!window.confirm(`为岗位 #${jobId} 生成一份只使用已确认事实的专属简历草稿？生成后仍需你本人打开 PDF 审阅。`)) return false;
       const generationButton = document.querySelector('[data-detail-action="create-resume"]');
       if (generationButton) generationButton.textContent = "正在生成…";
@@ -825,35 +836,50 @@ import {
       }
     }
 
+    let browserUseEpoch = 0;
+    $("browserUseDialog").addEventListener("close", () => {
+      browserUseEpoch++;
+      $("smsWebhookUrlDisplay").textContent = "打开弹窗后读取安全链接";
+      for (const id of ["browserUseDryRunBtn", "browserUseRunBtn"]) {
+        $(id).onclick = null;
+        $(id).disabled = true;
+      }
+    });
+    $("closeBrowserUseButton").onclick = () => $("browserUseDialog").close();
+
     async function openBrowserUseDialog(jobId) {
+      const epoch = ++browserUseEpoch;
       const dialog = $("browserUseDialog");
+      const isCurrent = () => epoch === browserUseEpoch && dialog.open;
       const cdpStatusEl = $("browserUseCdpStatus");
       const dryRunBtn = $("browserUseDryRunBtn");
       const runBtn = $("browserUseRunBtn");
       const logSection = $("browserUseLogSection");
       const logContent = $("browserUseLogContent");
+      dryRunBtn.disabled = runBtn.disabled = true;
+      dryRunBtn.onclick = runBtn.onclick = null;
+      $("smsWebhookUrlDisplay").textContent = "打开弹窗后读取安全链接";
 
       logSection.style.display = "none";
       logContent.textContent = "";
       cdpStatusEl.innerHTML = '<span class="quiet">正在检测本地 Chrome 调试环境与大模型配置…</span>';
 
-      if ($("buFactsStatus")) $("buFactsStatus").textContent = "仅展示当前档案（已核验真实字段）";
-      if ($("buFactName")) $("buFactName").textContent = activeProfile?.display_name || activeProfile?.person?.name || "待完善";
-      if ($("buFactDegree")) $("buFactDegree").textContent = activeProfile?.education?.[0]?.degree || activeProfile?.person?.degree || "本科";
-      if ($("buFactSchool")) $("buFactSchool").textContent = activeProfile?.education?.[0]?.school || activeProfile?.person?.school || "已确认";
-      if ($("buFactGpa")) $("buFactGpa").textContent = activeProfile?.education?.[0]?.gpa || "3.8/4.0";
-      if ($("buFactPhone")) $("buFactPhone").textContent = activeProfile?.phone || activeProfile?.person?.phone || "已绑定";
-      if ($("buFactEmail")) $("buFactEmail").textContent = activeProfile?.person?.contact?.email || activeProfile?.email || "尚未填写邮箱";
-      if ($("buFactExperience")) $("buFactExperience").textContent = `${activeProfile?.confirmed_fact_count || 12} 条已核验事实`;
+      const factFields = {Name: 'name', Degree: 'degree', School: 'school', Gpa: 'gpa', Phone: 'phone', Email: 'email', Experience: 'experience'};
+      for (const key of Object.keys(factFields)) $("buFact" + key).textContent = "待完善";
+      $("buFactsStatus").textContent = "正在读取当前档案…";
 
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
-
-      const closeBuDialog = () => {
-        dialog.close();
-        if ($("smsWebhookUrlDisplay")) $("smsWebhookUrlDisplay").textContent = "打开弹窗后读取安全链接";
-      };
-      $("closeBrowserUseButton").onclick = closeBuDialog;
+      manualCode.open(jobId);
+      try {
+        const profileData = await readApiResponse(await fetch('/api/profile', {
+          cache: 'no-store', headers: {'X-Job-Agent-Token': actionToken}
+        }));
+        if (!isCurrent()) return;
+        for (const [key, field] of Object.entries(factFields)) $("buFact" + key).textContent = profileData.facts?.[field] || '待完善';
+        $("buFactsStatus").textContent = "来自当前档案；教育与经历仅展示已确认内容。";
+      } catch (error) { if (isCurrent()) $("buFactsStatus").textContent = `档案读取失败：${error.message}`; }
+      if (!isCurrent()) return;
 
       let cdpConnected = false;
       let chromeInfo = null;
@@ -861,6 +887,7 @@ import {
       try {
         const res = await fetch("/api/jobs/browser-use/status", { cache: "no-store" });
         const data = await readApiResponse(res);
+        if (!isCurrent()) return;
         cdpConnected = Boolean(data.cdp_connected);
         chromeInfo = data.chrome_info || {};
 
@@ -870,7 +897,7 @@ import {
               <span>🟢 本机 Chrome CDP 调试端口 (9222) 已连接</span>
             </div>
             <div style="margin-top: 4px; color: #4b5563; font-size: 12px;">
-              已成功连接本地 Chrome。Agent 将直接挂载该浏览器窗口，复用你已登录的 Cookie 与指纹环境，无风控封号之忧。
+              已连接本地 Chrome。仅辅助填写；网站可能限制自动化，遇到验证或异常请停止并手工操作。
             </div>
           `;
         } else {
@@ -899,31 +926,34 @@ import {
           }
         }
       } catch (err) {
+        if (!isCurrent()) return;
         cdpStatusEl.innerHTML = `<span class="decision-warning">环境检测异常：${escapeHtml(err.message)}</span>`;
       }
 
       const updateSmsStatus = async () => {
         try {
-          const smsRes = await fetch("/api/sms/setup", { cache: "no-store" });
+          const smsRes = await fetch("/api/sms/setup", { cache: "no-store", headers: {"X-Job-Agent-Token": actionToken} });
           const smsData = await readApiResponse(smsRes);
+          if (!isCurrent()) return;
           if (smsData.webhook_url && $("smsWebhookUrlDisplay")) {
             $("smsWebhookUrlDisplay").textContent = smsData.webhook_url;
           }
           if (smsData.latest_code && smsData.latest_code.code) {
-            $("smsCurrentBadge").textContent = `已收到: ${smsData.latest_code.code}`;
+            $("smsCurrentBadge").textContent = "已收到";
             $("smsCurrentBadge").style.background = "#dcfce7";
             $("smsCurrentBadge").style.color = "#166534";
-            $("smsLatestDisplay").innerHTML = `<strong style="color: #166534;">最新有效验证码：${escapeHtml(smsData.latest_code.code)}</strong>（${smsData.latest_code.age_seconds || 0} 秒前收到）`;
+            $("smsLatestDisplay").textContent = `本机有一条有效验证码（${smsData.latest_code.age_seconds || 0} 秒前收到），请本人核对来源与目标页面。`;
           } else {
             $("smsCurrentBadge").textContent = "未接收";
             $("smsCurrentBadge").style.background = "#f1f5f9";
             $("smsCurrentBadge").style.color = "#475569";
-            $("smsLatestDisplay").textContent = "暂无最新验证码。iPhone 快捷指令自动发来后，Agent 会秒级自动填入网页。";
+            $("smsLatestDisplay").textContent = "暂无有效验证码。录入后仍需本人核对目标页面；接收不代表填写成功。";
           }
-        } catch (_) {}
+        } catch (_) { if (isCurrent()) $("smsLatestDisplay").textContent = "暂时无法读取短信设置，可使用手动录入。"; }
       };
 
       await updateSmsStatus();
+      if (!isCurrent()) return;
 
       const btnCopySms = $("btnCopySmsWebhook");
       if (btnCopySms) {
@@ -936,33 +966,19 @@ import {
         };
       }
 
-      const btnManualSms = $("smsManualSubmit");
-      if (btnManualSms) {
-        btnManualSms.onclick = async () => {
-          const val = $("smsManualInput").value.trim();
-          if (!val) return;
-          try {
-            await postLocalJson("/api/sms/manual", { code: val });
-            $("smsManualInput").value = "";
-            await updateSmsStatus();
-            showSuccess(`验证码 ${val} 已录入，Agent 代填时可直接使用！`);
-          } catch (err) {
-            showError(`录入失败：${err.message || err}`);
-          }
-        };
-      }
-
       const execute = async (dryRun) => {
+        if (!isCurrent() || dryRunBtn.disabled || runBtn.disabled) return;
         dryRunBtn.disabled = true;
         runBtn.disabled = true;
         logSection.style.display = "block";
-        logContent.textContent = dryRun ? "⏳ 正在生成模拟代填任务与字段对齐计划…" : "🚀 正在启动 browser-use 智能体，导航至岗位网申页面…\\n（请注意：Agent 绝对不会点击最终提交按钮）\\n\\n";
+        logContent.textContent = dryRun ? "⏳ 正在生成模拟代填任务与字段对齐计划…" : "🚀 正在启动 browser-use 智能体，导航至岗位网申页面…\\n（不会主动点击最终提交；网页副作用仍需本人核对）\\n\\n";
 
         try {
           const postRes = await postLocalJson(`/api/jobs/${jobId}/browser-use`, {
             dry_run: dryRun,
             cdp_url: "http://localhost:9222"
           });
+          if (!isCurrent()) return;
           const r = postRes.result || {};
           let out = "";
           if (dryRun) {
@@ -973,7 +989,7 @@ import {
             out += "========================================================\\n";
           } else {
             out += "=================== 【AI 代填执行结果】 ===================\\n";
-            out += `执行状态：${r.status === "stopped_for_review" ? "✅ 已完成代填并停留在人工确认页" : r.status}\\n`;
+            out += `执行状态：${r.status === "stopped_for_review" ? "任务已停止，待本人核对实际填写结果" : r.status}\\n`;
             out += `总结：\\n${r.summary}\\n\\n`;
             if (r.filled_fields && r.filled_fields.length) {
               out += `已识别并填写的字段：${r.filled_fields.join("、")}\\n`;
@@ -988,21 +1004,30 @@ import {
             out += "========================================================\\n";
           }
           logContent.textContent = out;
-          showSuccess(dryRun ? "模拟代填计划生成完毕。" : "AI 代填执行完毕，已停留在确认页请人工审核！");
+          showSuccess(dryRun ? "模拟计划已生成，未填写网页。" : `辅助任务已返回（${r.status || '状态未知'}），请到招聘页面核对实际结果。`);
         } catch (err) {
+          if (!isCurrent()) return;
           logContent.textContent += `\\n❌ 执行失败：${err.message || err}`;
           showError(`代填任务异常：${err.message || err}`);
         } finally {
-          dryRunBtn.disabled = false;
-          runBtn.disabled = false;
+          if (isCurrent()) {
+            dryRunBtn.disabled = false;
+            runBtn.disabled = false;
+          }
         }
       };
 
       dryRunBtn.onclick = () => execute(true);
       runBtn.onclick = () => execute(false);
+      dryRunBtn.disabled = runBtn.disabled = false;
     }
 
     let resumeEditorState = null;
+    const resumeTailor = createResumeTailor({getState: () => resumeEditorState, sync: syncEditorContent, token: () => actionToken});
+    const mockInterview = createMockInterview({token: () => actionToken});
+    const manualCode = createManualCode({token: () => actionToken});
+    const tracking = createTracking({token: () => actionToken, openJob: focusJob, changed: () => loadDashboard()});
+    $("trackingHub").hidden = true;
 
     async function openResumeEditor(jobId) {
       try {
@@ -1016,6 +1041,7 @@ import {
         renderEditorForm();
         if (typeof elements.resumeEditorDialog.showModal === "function") elements.resumeEditorDialog.showModal();
         else elements.resumeEditorDialog.setAttribute("open", "");
+        await resumeTailor.open(jobId);
       } catch (error) {
         showError(`打开简历编辑器失败：${error?.message || error}`);
         return false;
@@ -1383,6 +1409,7 @@ import {
         renderFeedback(data.recent_feedback || []);
         renderMethodology(data);
         renderHome(data);
+        void tracking.refresh();
 
         elements.freshnessMain.textContent = relativeFreshness(data.source_freshness_at);
         elements.freshnessSub.textContent = `${data.source_name || "本地 SQLite"} · 页面 ${formatDateTime(data.generated_at)} 刷新`;
@@ -1484,7 +1511,7 @@ import {
       }
       if (action === "open-resume") return openResumeDraft(jobId);
       if (action === "ask-agent-resume") return askAgentToReviseResume(jobId);
-      if (action === "interview") return openCopilot("这个职位面试该准备什么？");
+      if (action === "interview") return mockInterview.open(jobId, currentJobs.find(j => j.job_id === Number(jobId))?.title || '当前岗位');
       if (action === "outreach-greetings") {
         const dialog = $("outreachDialog");
         const list = $("outreachList");
@@ -2177,6 +2204,11 @@ import {
     // 智能录入岗位交互
     if (elements.openImportJobButton && elements.importJobDialog) {
       elements.openImportJobButton.addEventListener("click", () => {
+        if (!activeProfile) {
+          showError("请先建立个人资料，保存后即可录入岗位并匹配。无需连接 AI，也无需上传照片。");
+          elements.openProfileButton.click();
+          return;
+        }
         elements.rawJobInput.value = "";
         elements.parsedCompany.value = "";
         elements.parsedTitle.value = "";
@@ -2303,7 +2335,7 @@ import {
           elements.copilotInput?.setAttribute("placeholder", "请先选择岗位，再准备面试");
           return;
         }
-        openCopilot("这个职位面试该准备什么？");
+        mockInterview.open(selectedJobId, currentJobs.find(j => j.job_id === Number(selectedJobId))?.title || '当前岗位');
       }
 
       // Left Navigation Drawer (Screenshot 5)

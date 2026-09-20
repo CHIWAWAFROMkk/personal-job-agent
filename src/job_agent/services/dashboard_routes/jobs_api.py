@@ -27,7 +27,7 @@ from job_agent.services.portable_resume import (
     PortableResumeError, build_portable_resume_content, build_portable_resume_draft,
     find_latest_resume_manifest, find_profile_photo, resume_artifact_from_manifest
 )
-from job_agent.services.profile_store import ProfileStoreError, load_profile
+from job_agent.services.profile_store import ProfileStoreError, load_profile as _load_profile
 from job_agent.services.project_workshop import ProjectWorkshopError, project_preview_path, project_workshop_snapshot, run_project, verify_project
 from job_agent.services.resume_editor import ResumeEditorError, load_latest_resume_content, rerender_edited_resume, validate_resume_content
 from job_agent.services.resume_polish import CloudAIUnavailableError, ResumePolishError, polish_resume_content_locally, polish_resume_content_with_jd
@@ -57,6 +57,16 @@ from job_agent.services.dashboard_routes.dashboard_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def load_profile(path: Path) -> Profile:
+    """Keep private paths and validation payloads out of public API errors."""
+    if not path.is_file():
+        raise ProfileStoreError("请先打开“我的 → 个人资料与简历”，导入简历并确认真实经历，再进行岗位匹配或生成简历。")
+    try:
+        return _load_profile(path)
+    except ProfileStoreError as exc:
+        raise ProfileStoreError("个人档案暂时无法读取，请到“我的 → 个人资料与简历”检查档案或重新导入；原文件未被修改。") from exc
 
 
 @route("POST", r"/api/resume/preview")
@@ -533,8 +543,6 @@ def handle_resume_revise(handler, job_id_str):
             raise ValueError("单次修改要求不能超过 2000 个字符。")
 
         photo_path = find_profile_photo(handler.private_dir)
-        if photo_path is None:
-            raise ValueError("请先在“个人资料与简历”中上传证件照；当前默认模板要求右上角证件照。")
         job = handler.repository.get_job(job_id)
         config, _ = effective_runtime_config(handler.runtime_config_path)
         try:
@@ -561,7 +569,7 @@ def handle_resume_revise(handler, job_id_str):
                 job_id,
             )
         person = dict(content.get("person") or {})
-        person["photo_path"] = str(photo_path.resolve())
+        person["photo_path"] = str(photo_path.resolve()) if photo_path else ""
         content["person"] = person
         quota_available = not (
             config.ai.monthly_quota is not None
@@ -692,8 +700,6 @@ def handle_resume_draft(handler, job_id_str):
             )
         )
         photo_path = find_profile_photo(handler.private_dir)
-        if photo_path is None:
-            raise ValueError("请先在“个人资料与简历”中上传证件照；当前默认模板要求右上角证件照。")
         content = build_portable_resume_content(
             profile,
             job,
@@ -1062,9 +1068,8 @@ def handle_import_parsed_job(handler):
             source_url=source_url,
             location=location,
         )
-        outcome = handler.repository.upsert_job(record)
-        
         profile = load_profile(handler.profile_path)
+        outcome = handler.repository.upsert_job(record)
         structured = structure_job_locally(
             jd_text,
             company=company,

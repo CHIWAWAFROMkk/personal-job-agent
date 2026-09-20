@@ -101,7 +101,8 @@ def compose_resume_content_with_jd(
                  ExperienceKind.CAMPUS: "校园经历", ExperienceKind.VOLUNTEER: "志愿经历",
                  ExperienceKind.OTHER: "其他经历"}.get(experience.kind, "项目经历")
         sections.setdefault(title, []).append({
-            "experience_id": eid, "experience_kind": experience.kind.value, "organization": experience.organization or "",
+            "experience_id": eid, "experience_kind": experience.kind.value,
+            "organization": experience.organization or "机构 / 项目名称待完善",
             "role": experience.role, "dates": " - ".join(v.replace("-", ".") for v in (experience.start, experience.end) if v),
             "context": experience.summary.split("。")[0] if "派遣" in experience.summary else "",
             "bullets": bullets,

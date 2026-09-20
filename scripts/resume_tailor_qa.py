@@ -35,7 +35,11 @@ def main():
                 page.goto(f'http://127.0.0.1:{server.server_port}', wait_until='networkidle')
                 page.evaluate('(theme) => document.documentElement.dataset.theme = theme', theme)
                 # Public UI event handler, using a synthetic saved-draft response.
-                page.locator('#workspaceNav').click()
+                if width <= 900:
+                    page.locator('#openDrawerButton').click()
+                    page.locator('[data-drawer-nav="workspace"]').click()
+                else:
+                    page.locator('#workspaceNav').click()
                 page.locator('.job-choice').first.click()
                 page.evaluate("""() => { const b=document.createElement('button'); b.dataset.detailAction='edit-resume';
                   b.id='qaEdit'; b.textContent='编辑合成草稿'; document.querySelector('#jobDetail .next-action .task-controls').append(b); }""")

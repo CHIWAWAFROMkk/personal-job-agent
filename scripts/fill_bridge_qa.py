@@ -25,7 +25,11 @@ def main():
                 base = f'http://127.0.0.1:{server.server_port}'
                 page.goto(base, wait_until='networkidle')
                 page.evaluate('(theme)=>document.documentElement.dataset.theme=theme', theme)
-                page.locator('#workspaceNav').click()
+                if width <= 900:
+                    page.locator('#openDrawerButton').click()
+                    page.locator('[data-drawer-nav="workspace"]').click()
+                else:
+                    page.locator('#workspaceNav').click()
                 choice = page.locator('.job-choice').first
                 job_id = int(choice.get_attribute('data-select-job'))
                 choice.click()
