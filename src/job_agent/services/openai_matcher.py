@@ -24,6 +24,11 @@ class OpenAIMatcherError(RuntimeError):
     pass
 
 
+# Match analysis has a short, bounded output. Explicitly disable SDK retries:
+# a timed-out paid request may have completed on the provider's side.
+SHORT_AI_REQUEST_TIMEOUT_SECONDS = 45.0
+
+
 class AIJobAnalysis(StrictModel):
     job: StructuredJob
     score_breakdown: ScoreBreakdown
@@ -199,7 +204,11 @@ def match_job_with_openai(
         source_url=source_url,
     )
     try:
-        response = OpenAI(api_key=resolved_api_key).responses.parse(
+        response = OpenAI(
+            api_key=resolved_api_key,
+            timeout=SHORT_AI_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,
+        ).responses.parse(
             model=model,
             store=False,
             input=[
@@ -267,6 +276,8 @@ def match_job_with_openai_compatible(
         response = OpenAI(
             api_key=resolved_api_key,
             base_url=base_url,
+            timeout=SHORT_AI_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,
         ).chat.completions.create(
             model=model,
             messages=[

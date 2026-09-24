@@ -33,7 +33,10 @@ def body_blocks(content: dict):
     for section in content.get("experience_sections", []):
         yield "section", resume_section_title(section), ""
         for entry in section.get("entries", []):
-            yield "entry", "  |  ".join(str(entry.get(k) or "") for k in ("organization", "role") if entry.get(k)), str(entry.get("dates") or "")
+            heading = "  |  ".join(str(entry.get(k) or "") for k in ("organization", "role") if entry.get(k))
+            dates = str(entry.get("dates") or "")
+            if heading or dates:
+                yield "entry", heading, dates
             if entry.get("context"):
                 yield "text", entry["context"], ""
             for bullet in entry.get("bullets", []):

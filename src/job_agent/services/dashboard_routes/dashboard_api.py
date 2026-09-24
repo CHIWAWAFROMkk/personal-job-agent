@@ -5,8 +5,10 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 import webbrowser
-from datetime import UTC, date, datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -18,16 +20,24 @@ from job_agent.models.dashboard import (
     DashboardStrategySummary,
 )
 from job_agent.models.job_record import JobDetail
+from job_agent.models.application import ApplicationPack, ResumeBundle
 from job_agent.models.profile import Profile
 from job_agent.services.application_pack import ApplicationPackError, resolve_resume_bundle
-from job_agent.services.browser_assist import BrowserAssistError, find_application_pack
-from job_agent.services.job_repository import JobRepository
+from job_agent.services.api_usage import (
+    ApiQuotaExceededError, ApiUsageUnavailableError, reserve_api_usage,
+)
+from job_agent.services.browser_assist import BrowserAssistError, load_application_pack
+from job_agent.services.job_repository import JobRepository, normalize_company, normalize_title
 from job_agent.services.match_refresh import refresh_all_matches
 from job_agent.services.job_strategy import JobStrategyResult, evaluate_job_strategy
-from job_agent.services.portable_resume import find_latest_resume_manifest
 from job_agent.services.preparation_pack import preparation_priority_for_status
 from job_agent.services.profile_store import ProfileStoreError, load_profile
+from job_agent.services.portable_resume import (
+    read_resume_manifest, resume_manifest_fact_approved,
+    resume_manifest_fact_review_required,
+)
 from job_agent.services.runtime_config import (
+    AIConnectorConfig,
     RuntimeConfigError,
     RuntimeConfigUpdate,
     public_runtime_config,
@@ -45,14 +55,15 @@ from job_agent.services.dashboard_routes import route
 
 logger = logging.getLogger(__name__)
 
-_LOCAL_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
-
-def _profile_summary(profile_path: Path | None) -> DashboardProfileSummary | None:
-    if profile_path is None or not profile_path.is_file():
-        return None
-    try:
-        profile = load_profile(profile_path)
-    except ProfileStoreError:
+def _profile_summary(profile: Profile | Path | None) -> DashboardProfileSummary | None:
+    if isinstance(profile, Path):
+        if not profile.is_file():
+            return None
+        try:
+            profile = load_profile(profile)
+        except ProfileStoreError:
+            return None
+    if profile is None:
         return None
     availability = profile.job_search.availability
     commute = profile.job_search.commute
@@ -115,7 +126,7 @@ def _parse_datetime(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 def _local_date(value: str) -> date:
-    return _parse_datetime(value).astimezone(_LOCAL_TIMEZONE).date()
+    return _parse_datetime(value).astimezone().date()
 
 def _latest_preparation_path(output_dir: Path, job_id: int) -> Path | None:
     root = output_dir / "preparation-packs"
@@ -136,6 +147,25 @@ def _source_freshness(repository: JobRepository) -> datetime:
     mtimes = [path.stat().st_mtime for path in candidates if path.is_file()]
     return datetime.fromtimestamp(max(mtimes), tz=UTC) if mtimes else datetime.now(UTC)
 
+
+def _file_stamp(path: Path | None) -> tuple[int, int] | None:
+    if path is None:
+        return None
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def _dashboard_cache_key(handler) -> tuple[date, tuple[int, int] | None, tuple[int, int] | None, tuple[int, int] | None]:
+    return (
+        date.today(),
+        _file_stamp(handler.repository.path),
+        _file_stamp(Path(str(handler.repository.path) + "-wal")),
+        _file_stamp(handler.profile_path),
+    )
+
 def _job_source_url(job: JobDetail) -> str | None:
     return next((source.source_url for source in job.sources if source.source_url), None)
 
@@ -143,38 +173,126 @@ def _safe_slug(value: str, *, fallback: str) -> str:
     normalized = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", value).strip("-")
     return normalized[:48] or fallback
 
+
+@dataclass
+class _WorkspaceIndex:
+    content_paths: dict[tuple[str, str], list[Path]]
+    manifest_paths: dict[int, Path]
+    packs: dict[int, ApplicationPack]
+
+
+def _workspace_index(output_dir: Path) -> _WorkspaceIndex:
+    """Walk material directories once per snapshot, not once per job."""
+    content_paths: dict[tuple[str, str], list[Path]] = {}
+    manifest_ranked: dict[int, tuple[float, str, Path]] = {}
+    pack_ranked: dict[int, tuple[int, float, str, ApplicationPack]] = {}
+    applications_dir = output_dir / "applications"
+    if applications_dir.is_dir():
+        for path in applications_dir.rglob("resume-content*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            target = payload.get("target", {}) if isinstance(payload, dict) else {}
+            if not isinstance(target, dict):
+                continue
+            key = (
+                normalize_company(str(target.get("company", ""))),
+                normalize_title(str(target.get("role", ""))),
+            )
+            content_paths.setdefault(key, []).append(path)
+        for path in applications_dir.rglob("resume-version*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                target = payload.get("target", {})
+                job_id = int(target.get("job_id") or 0)
+                rank = (path.stat().st_mtime, str(path.resolve()), path.resolve())
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+            if job_id and (job_id not in manifest_ranked or rank > manifest_ranked[job_id]):
+                manifest_ranked[job_id] = rank
+    packs_dir = output_dir / "application-packs"
+    if packs_dir.is_dir():
+        for path in packs_dir.rglob("application-pack.json"):
+            try:
+                pack = load_application_pack(path)
+                rank = (
+                    int(pack.resume.status == "ready" and pack.resume.qa_verified),
+                    path.stat().st_mtime, str(path), pack,
+                )
+            except (BrowserAssistError, OSError):
+                continue
+            job_id = pack.job.job_id
+            if job_id not in pack_ranked or rank[:3] > pack_ranked[job_id][:3]:
+                pack_ranked[job_id] = rank
+    return _WorkspaceIndex(
+        content_paths=content_paths,
+        manifest_paths={job_id: item[2] for job_id, item in manifest_ranked.items()},
+        packs={job_id: item[3] for job_id, item in pack_ranked.items()},
+    )
+
 def _job_workspace(
     profile: Profile | None,
     job: JobDetail,
     *,
     output_dir: Path,
+    index: _WorkspaceIndex | None = None,
 ) -> DashboardJobWorkspace:
     blockers: list[str] = []
     if profile is None:
         return DashboardJobWorkspace(blockers=["先建立个人资料并确认真实经历。"])
 
-    try:
-        resume = resolve_resume_bundle(profile, job, output_dir / "applications")
-    except (ApplicationPackError, OSError):
-        resume = None
-        blockers.append("岗位专属简历文件需要重新检查。")
-    manifest = find_latest_resume_manifest(output_dir / "applications", job.job_id)
-    latest_visual_status = ""
-    if manifest is not None:
+    if index is None:
+        index = _workspace_index(output_dir)
+
+    resume: ResumeBundle | None = None
+    resume_rank: tuple[int, float, str] | None = None
+    resume_error = False
+    key = (normalize_company(job.company), normalize_title(job.title))
+    status_priority = {"ready": 2, "needs_review": 1, "needs_generation": 0}
+    for content_path in index.content_paths.get(key, []):
         try:
-            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            candidate = resolve_resume_bundle(
+                profile, job, output_dir / "applications", content_path=content_path,
+            )
+            rank = (
+                status_priority[candidate.status],
+                content_path.stat().st_mtime,
+                str(content_path),
+            )
+        except (ApplicationPackError, OSError):
+            resume_error = True
+            continue
+        if resume_rank is None or rank > resume_rank:
+            resume, resume_rank = candidate, rank
+    if resume is None and resume_error:
+        blockers.append("岗位专属简历文件需要重新检查。")
+    manifest = index.manifest_paths.get(job.job_id)
+    latest_visual_status = ""
+    latest_fact_review_pending = False
+    if manifest is not None:
+        manifest_payload = read_resume_manifest(manifest)
+        if manifest_payload is not None:
             latest_visual_status = str(
                 manifest_payload.get("qa", {}).get("pdf_visual_review", "")
             )
-        except (OSError, json.JSONDecodeError, AttributeError):
+            latest_fact_review_pending = (
+                resume_manifest_fact_review_required(manifest, manifest_payload)
+                and not resume_manifest_fact_approved(manifest, manifest_payload)
+            )
+        else:
+            latest_fact_review_pending = True
             blockers.append("最新简历质检清单需要重新检查。")
 
     if resume is None or resume.status == "needs_generation":
         resume_status = "missing"
         blockers.append("先生成岗位专属简历草稿。")
-    elif latest_visual_status == "pending_user_review" or resume.status == "needs_review":
+    elif latest_visual_status == "pending_user_review" or latest_fact_review_pending or resume.status == "needs_review":
         resume_status = "needs_review"
-        blockers.append("打开 PDF 并由本人确认版面后才能准备投递文件。")
+        blockers.append(
+            "最新简历需本人重新核对事实与 PDF 版面。"
+            if latest_fact_review_pending else "打开 PDF 并由本人确认版面后才能准备投递文件。"
+        )
     else:
         resume_status = "ready"
 
@@ -182,12 +300,12 @@ def _job_workspace(
     docx_url = f"/resume-draft/{job.job_id}/docx" if manifest else None
 
     application_pack_ready = False
-    try:
-        _, pack = find_application_pack(output_dir / "application-packs", job.job_id)
-    except BrowserAssistError:
-        pack = None
+    pack = index.packs.get(job.job_id)
     if pack is not None:
-        application_pack_ready = pack.resume.status == "ready" and pack.resume.qa_verified
+        application_pack_ready = (
+            not latest_fact_review_pending
+            and pack.resume.status == "ready" and pack.resume.qa_verified
+        )
     if resume_status == "ready" and not application_pack_ready:
         blockers.append("投递材料包尚未就绪，请重新确认简历。")
 
@@ -216,22 +334,25 @@ def build_dashboard_snapshot(
     action_token: str = "",
 ) -> DashboardSnapshot:
     repository.verify()
-    if profile_path is not None and profile_path.is_file():
-        refresh_all_matches(repository, load_profile(profile_path))
-    today = today or datetime.now(_LOCAL_TIMEZONE).date()
+    profile_unavailable = False
+    try:
+        profile = load_profile(profile_path) if profile_path is not None and profile_path.is_file() else None
+    except ProfileStoreError:
+        logger.warning("Saved profile could not be read; showing the remaining local dashboard data.")
+        profile = None
+        profile_unavailable = True
+    if profile is not None:
+        refresh_all_matches(repository, profile)
+    today = today or date.today()
     stats = repository.stats()
     application_summary = repository.application_summary()
-    jobs = repository.list_jobs(limit=1000)
-    applications = repository.list_applications(limit=1000)
-    candidates = repository.list_search_candidates(limit=1000)
+    jobs = repository.list_job_details()
+    applications = repository.list_applications(limit=None)
+    candidates = repository.list_search_candidates(limit=None)
+    events_by_job = repository.list_application_events_by_job()
     application_by_job = {item.job_id: item for item in applications}
-    profile_summary = _profile_summary(profile_path)
-    profile: Profile | None = None
-    if profile_path is not None and profile_path.is_file():
-        try:
-            profile = load_profile(profile_path)
-        except ProfileStoreError:
-            profile = None
+    profile_summary = _profile_summary(profile)
+    workspace_index = _workspace_index(output_dir) if profile is not None else _WorkspaceIndex({}, {}, {})
     max_commute_minutes = (
         profile_summary.max_one_way_minutes if profile_summary else None
     )
@@ -252,7 +373,7 @@ def build_dashboard_snapshot(
     archived_jobs = repository.archived_jobs()
     for job in jobs:
         application = application_by_job.get(job.job_id)
-        detail = repository.get_job(job.job_id)
+        detail = job
         source_url = _job_source_url(detail)
         commute_fit = _commute_fit(job.commute_minutes, max_commute_minutes)
         strategy = evaluate_job_strategy(
@@ -299,7 +420,7 @@ def build_dashboard_snapshot(
             commute_route_summary=job.commute_route_summary,
             commute_provider=job.commute_provider,
             commute_fit=commute_fit,
-            workspace=_job_workspace(profile, detail, output_dir=output_dir),
+            workspace=_job_workspace(profile, detail, output_dir=output_dir, index=workspace_index),
         )
         tracked_jobs.append(row)
         if row.job_archived:
@@ -365,15 +486,15 @@ def build_dashboard_snapshot(
                     preparation_path=str(latest_pack) if latest_pack else None,
                 )
             )
-        for event in repository.list_application_events(application.job_id):
+        for event in events_by_job.get(application.job_id, []):
             occurred_at = _parse_datetime(event.occurred_at)
             if (
-                occurred_at.astimezone(_LOCAL_TIMEZONE).date() == today
+                occurred_at.astimezone().date() == today
                 and event.status in _MEANINGFUL_FEEDBACK_STATUSES
             ):
                 today_new_feedback += 1
             if (
-                occurred_at.astimezone(_LOCAL_TIMEZONE).date() >= cutoff_30_days
+                occurred_at.astimezone().date() >= cutoff_30_days
                 and event.status in _MEANINGFUL_FEEDBACK_STATUSES
             ):
                 meaningful_jobs_last_30_days.add(application.job_id)
@@ -632,6 +753,8 @@ def build_dashboard_snapshot(
         "通勤筛选使用本人确认或地图服务计算的单程分钟数；办公地点不详时标记为待估算，不会直接排除。通勤不会改写能力匹配分。",
         "岗位策略分与能力匹配分相互独立；学校背景只在 JD 明确设门槛时判断，不做隐含扣分。",
     ]
+    if profile_unavailable:
+        caveats.insert(0, "已保存的个人资料无法读取。岗位和投递记录仍可查看；请先备份资料文件，再修复或重新建立资料。")
     return DashboardSnapshot(
         source_path=str(repository.path),
         source_freshness_at=_source_freshness(repository),
@@ -643,6 +766,7 @@ def build_dashboard_snapshot(
         recent_feedback=recent_feedback,
         candidate_breakdown=candidate_breakdown,
         active_profile=profile_summary,
+        profile_error=profile_unavailable,
         strategy=strategy_summary,
         action_token=action_token,
         caveats=caveats,
@@ -700,37 +824,76 @@ def handle_settings_test_connection(handler, *args):
         return
     try:
         body = json.loads(handler._read_body(_MAX_JSON_BODY).decode("utf-8")) if handler.headers.get("Content-Length") else {}
+        if not isinstance(body, dict):
+            raise ValueError("连接测试内容格式不正确。")
         provider = body.get("provider") or "local"
         model = body.get("model")
         base_url = body.get("base_url")
         api_key = body.get("api_key")
+        draft_quota = body.get("monthly_quota")
+        if not all(value is None or isinstance(value, str) for value in (provider, model, base_url, api_key)):
+            raise ValueError("连接测试字段格式不正确。")
+        api_key = (api_key or "").strip()
 
         from job_agent.services.runtime_config import effective_runtime_config
         current_cfg, _ = effective_runtime_config(handler.runtime_config_path)
-        if not api_key:
-            api_key = current_cfg.ai.api_key
-        if not model:
-            model = current_cfg.ai.model or ("deepseek-chat" if provider == "deepseek" else "gpt-4o")
-        if not base_url:
-            base_url = current_cfg.ai.base_url or ("https://api.deepseek.com" if provider == "deepseek" else None)
-
+        if draft_quota in (None, ""):
+            effective_quota = current_cfg.ai.monthly_quota
+        else:
+            try:
+                selected_quota = int(draft_quota)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("本机月度上限必须是正整数。") from exc
+            if not 1 <= selected_quota <= 10_000_000 or str(selected_quota) != str(draft_quota).strip():
+                raise ValueError("本机月度上限必须是正整数。")
+            effective_quota = min(current_cfg.ai.monthly_quota, selected_quota) if current_cfg.ai.monthly_quota is not None else selected_quota
         if provider == "local":
             handler._json({"ok": True, "provider": "local", "message": "本地能力无需网络连接，已就绪！"})
             return
+        if provider == "codex":
+            from job_agent.services.codex_bridge import find_codex_executable
+            ready = find_codex_executable() is not None
+            handler._json({
+                "ok": ready, "provider": "codex",
+                "message": "已找到本机 Codex CLI；模型权限在首次使用时验证。" if ready else "未找到本机 Codex CLI。",
+            })
+            return
+        if provider not in {"openai", "deepseek", "openai_compatible"}:
+            raise ValueError("不支持的 AI 服务商。")
+        if provider == "openai_compatible":
+            base_url = base_url or (current_cfg.ai.base_url if current_cfg.ai.provider == provider else None)
+        elif provider == "deepseek":
+            base_url = (current_cfg.ai.base_url if current_cfg.ai.provider == provider else None) or "https://api.deepseek.com"
+        else:
+            base_url = None
+        if not api_key and provider == current_cfg.ai.provider and base_url == current_cfg.ai.base_url:
+            api_key = current_cfg.ai.api_key
+        if not model:
+            model = current_cfg.ai.model if provider == current_cfg.ai.provider else (
+                "deepseek-chat" if provider == "deepseek" else "gpt-4o"
+            )
 
         if not api_key:
             handler._json({"ok": False, "provider": provider, "message": "尚未配置 API Key，请先输入密钥。"})
             return
 
+        try:
+            AIConnectorConfig(provider=provider, model=model, base_url=base_url, api_key=api_key)
+        except ValueError as exc:
+            raise ValueError("连接测试配置无效，请检查模型、密钥和服务地址。") from exc
+
         import time
         from openai import OpenAI
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=10, max_retries=0)
         t0 = time.perf_counter()
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=2,
-        )
+        with reserve_api_usage(
+            handler.api_usage_path, "ai", provider, effective_quota,
+        ) as usage:
+            with OpenAI(api_key=api_key, base_url=base_url, timeout=10, max_retries=0) as client:
+                usage.call(lambda: client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=2,
+                ))
         latency_ms = int((time.perf_counter() - t0) * 1000)
         handler._json({
             "ok": True,
@@ -744,7 +907,14 @@ def handle_settings_test_connection(handler, *args):
         if status_code is None:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
         
-        msg = str(exc)
+        safe_input_messages = {
+            "连接测试内容格式不正确。",
+            "连接测试字段格式不正确。",
+            "不支持的 AI 服务商。",
+            "连接测试配置无效，请检查模型、密钥和服务地址。",
+            "本机月度上限必须是正整数。",
+        }
+        msg = str(exc) if isinstance(exc, (ApiQuotaExceededError, ApiUsageUnavailableError)) or str(exc) in safe_input_messages else "连接测试未完成，请检查网络与服务商设置后重试。"
         if status_code == 401:
             msg = "身份验证失败（401 Unauthorized），请检查 API Key 是否正确。"
         elif status_code == 402:
@@ -762,12 +932,27 @@ def handle_settings_test_connection(handler, *args):
 @route("GET", r"/api/dashboard")
 def handle_dashboard(handler, *args):
     try:
-        snapshot = build_dashboard_snapshot(
-            handler.repository,
-            output_dir=handler.output_dir,
-            profile_path=handler.profile_path,
-            action_token=handler.action_token,
-        )
+        # Keep repeated browser refreshes cheap while detecting ordinary SQLite
+        # and profile writes. External edits to material files are bounded by
+        # the short TTL; local POST actions invalidate this cache immediately.
+        key = _dashboard_cache_key(handler)
+        with handler.dashboard_cache_lock:
+            cache = handler.dashboard_cache
+            if (
+                cache["key"] != key
+                or cache["payload"] is None
+                or time.monotonic() - cache["created_at"] >= 10
+            ):
+                snapshot = build_dashboard_snapshot(
+                    handler.repository,
+                    output_dir=handler.output_dir,
+                    profile_path=handler.profile_path,
+                    action_token=handler.action_token,
+                )
+                cache["key"] = _dashboard_cache_key(handler)
+                cache["payload"] = snapshot.model_dump(mode="json")
+                cache["created_at"] = time.monotonic()
+            payload = cache["payload"]
     except Exception:
         logger.exception("Failed to build dashboard snapshot.")
         handler._json(
@@ -775,4 +960,4 @@ def handle_dashboard(handler, *args):
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
         return
-    handler._json(snapshot.model_dump(mode="json"))
+    handler._json(payload)

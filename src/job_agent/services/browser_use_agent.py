@@ -15,11 +15,13 @@ import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from job_agent.models.base import StrictModel
 from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import Profile
 from job_agent.services.runtime_config import RuntimeConfig, RuntimeConfigError
+from job_agent.services.safe_job_fetch import UnsafeJobURL, resolve_public
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,84 @@ def is_submission_element(node: Any) -> tuple[bool, str]:
     return False, ""
 
 
+_FORBIDDEN_INPUT_LABEL = re.compile(
+    r"验证码|校验码|短信码|动态口令|密码|支付|身份证|"
+    r"captcha|verification[ _-]?code|one[ _-]?time|\botp\b|password|payment|identity[ _-]?number",
+    re.IGNORECASE,
+)
+
+
+def is_forbidden_input_element(node: Any) -> tuple[bool, str]:
+    """Stop before typing into a verification or sensitive control."""
+    if node is None:
+        return True, "无法核验输入目标"
+    current = node
+    for depth in range(3):
+        if current is None:
+            break
+        attrs = getattr(current, "attributes", None) or {}
+        if not isinstance(attrs, dict):
+            return True, "输入目标属性无法核验"
+        field_type = str(attrs.get("type") or "").casefold()
+        if field_type in {"password", "hidden", "submit", "button", "file"}:
+            return True, "输入目标属于敏感或非文字控件"
+        labels = " ".join(
+            str(attrs.get(name) or "")
+            for name in ("id", "name", "aria-label", "placeholder", "autocomplete", "title")
+        )
+        # A form ancestor can contain unrelated CAPTCHA text. Only inspect the
+        # control itself or an actual wrapping label, not the entire form.
+        tag_name = str(getattr(current, "tag_name", "") or "").casefold()
+        if hasattr(current, "get_all_children_text") and (depth == 0 or tag_name == "label"):
+            try:
+                labels += " " + str(current.get_all_children_text() or "")[:300]
+            except Exception:
+                return True, "输入目标文字无法核验"
+        if _FORBIDDEN_INPUT_LABEL.search(labels):
+            return True, "验证码或敏感字段必须由本人填写"
+        current = getattr(current, "parent", None)
+    return False, ""
+
+
+def _approved_job_navigation(job: JobDetail) -> tuple[str, str]:
+    url = next((item.source_url for item in job.sources if item.source_url), "")
+    if not url:
+        raise BrowserUseError("岗位缺少可核验的招聘页链接，请先补充官方岗位网址。")
+    try:
+        if urlsplit(url).scheme.casefold() != "https":
+            raise BrowserUseError("浏览器辅助只接受 HTTPS 招聘页。")
+    except ValueError as exc:
+        raise BrowserUseError("岗位链接格式无效，浏览器辅助已停止。") from exc
+    try:
+        parts, hostname, _port, _address = resolve_public(url, timeout=4)
+    except UnsafeJobURL as exc:
+        raise BrowserUseError("岗位链接未通过公开网址检查，浏览器辅助已停止。") from exc
+    if parts.scheme != "https":
+        raise BrowserUseError("浏览器辅助只接受 HTTPS 招聘页。")
+    return url, hostname
+
+
+def validate_local_cdp_url(url: str) -> str:
+    """Never connect an authenticated browser session to a remote debugger."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError as exc:
+        raise BrowserUseError("浏览器调试地址格式无效。") from exc
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or port is None
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
+        raise BrowserUseError("浏览器调试地址只允许本机 HTTP 端口。")
+    return url
+
+
 def get_safe_controller_class() -> type:
     """Return the SafeJobController class extending browser_use.Controller."""
     if not is_browser_use_available():
@@ -124,9 +204,15 @@ def get_safe_controller_class() -> type:
     class SafeJobController(Controller):
         """Browser-Use controller strictly enforcing hard-stop safety policies."""
 
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
+        def __init__(
+            self, *args: Any, approved_first_url: str | None = None,
+            approved_resume_path: str | None = None, **kwargs: Any,
+        ) -> None:
             super().__init__(*args, **kwargs)
             self.blocked_attempts: list[str] = []
+            self.approved_first_url = approved_first_url
+            self.approved_resume_path = approved_resume_path
+            self.initial_navigation_used = False
             for act_name in ("evaluate", "write_file", "replace_file", "send_keys"):
                 if act_name in self.registry.registry.actions:
                     self.exclude_action(act_name)
@@ -142,7 +228,7 @@ def get_safe_controller_class() -> type:
             **kwargs: Any,
         ) -> ActionResult:
             # Deny new/unreviewed dependency actions, even if registered later.
-            allowed = {"done", "extract", "scroll", "wait", "search_page", "find_text", "input", "upload_file", "click"}
+            allowed = {"done", "extract", "scroll", "wait", "search_page", "find_text", "input", "upload_file", "click", "navigate"}
             for action_name, params in action.model_dump(exclude_unset=True).items():
                 if params is None:
                     continue
@@ -150,8 +236,36 @@ def get_safe_controller_class() -> type:
                     return self._stop("本轮已停止，不能继续执行其他动作")
                 if action_name not in allowed:
                     return self._stop("该动作未经安全审查")
-                if action_name == "input" and (not isinstance(params, dict) or any(ch in str(params.get("text", "")) for ch in ("\r", "\n", "\t"))):
-                    return self._stop("包含可能触发表单操作的控制字符")
+                if action_name == "navigate":
+                    if (
+                        not isinstance(params, dict)
+                        or self.initial_navigation_used
+                        or not self.approved_first_url
+                        or params.get("url") != self.approved_first_url
+                        or params.get("new_tab") is not True
+                    ):
+                        return self._stop("仅允许首次打开已核验的岗位页面")
+                    self.initial_navigation_used = True
+                if action_name == "input":
+                    if not isinstance(params, dict) or any(ch in str(params.get("text", "")) for ch in ("\r", "\n", "\t")):
+                        return self._stop("包含可能触发表单操作的控制字符")
+                    idx = params.get("index")
+                    if type(idx) is not int or browser_session is None:
+                        return self._stop("无法核验输入目标")
+                    try:
+                        node = (await browser_session.get_selector_map()).get(idx)
+                        forbidden, reason = is_forbidden_input_element(node)
+                    except Exception:
+                        return self._stop("输入目标检查失败")
+                    if forbidden:
+                        return self._stop(reason)
+                if action_name == "upload_file":
+                    if (
+                        not isinstance(params, dict)
+                        or not self.approved_resume_path
+                        or params.get("path") != self.approved_resume_path
+                    ):
+                        return self._stop("仅允许上传已审核的本岗位简历 PDF")
                 if action_name == "click" and isinstance(params, dict):
                     idx = params.get("index")
                     if type(idx) is not int or browser_session is None or params.get("coordinate_x") is not None or params.get("coordinate_y") is not None:
@@ -380,22 +494,33 @@ async def _run_agent_async(
     """Async execution of browser-use agent."""
     from browser_use import Agent, Browser
 
+    validate_local_cdp_url(cdp_url)
+    target_url, hostname = _approved_job_navigation(job)
+    approved_resume_path: str | None = None
+    if resume_path is not None:
+        resolved = resume_path.expanduser().resolve()
+        if not resolved.is_file() or resolved.suffix.casefold() != ".pdf":
+            raise BrowserUseError("定向简历 PDF 未通过文件检查，已停止上传。")
+        approved_resume_path = str(resolved)
     task_prompt = build_browser_use_task_prompt(job, profile, resume_path)
     llm = create_browser_use_llm(config)
 
     cdp_connected = check_cdp_available(cdp_url)
     if cdp_connected:
-        browser = Browser(cdp_url=cdp_url)
+        browser = Browser(cdp_url=cdp_url, allowed_domains=[hostname], captcha_solver=False)
     else:
         # Fall back to local browser instance
-        browser = Browser(headless=headless, channel="chrome")
+        browser = Browser(headless=headless, channel="chrome", allowed_domains=[hostname], captcha_solver=False)
 
     # Use vision if model supports multimodal (e.g. gpt-4o), disable if deepseek
     is_deepseek = config.ai.provider.lower() == "deepseek" or "deepseek" in config.ai.model.lower()
     use_vision = not is_deepseek
 
     SafeControllerCls = get_safe_controller_class()
-    controller = SafeControllerCls()
+    controller = SafeControllerCls(
+        approved_first_url=target_url,
+        approved_resume_path=approved_resume_path,
+    )
 
     agent = Agent(
         task=task_prompt,
@@ -406,6 +531,9 @@ async def _run_agent_async(
         max_actions_per_step=3,
         max_failures=3,
         use_judge=False,
+        directly_open_url=False,
+        initial_actions=[{"navigate": {"url": target_url, "new_tab": True}}],
+        available_file_paths=[approved_resume_path] if approved_resume_path else [],
         extend_system_message=(
             "CRITICAL SAFETY DIRECTIVE:\n"
             "You are an automated assistant helping the candidate fill out application forms.\n"
@@ -471,27 +599,35 @@ def run_browser_use_assist(
 ) -> BrowserUseRunResult:
     """Run browser-use assistant synchronously with full error handling and dry-run support."""
     started_at = datetime.now(UTC)
-    cdp_connected = check_cdp_available(cdp_url)
+    validate_local_cdp_url(cdp_url)
 
     if dry_run:
-        prompt = build_browser_use_task_prompt(job, profile, resume_path)
+        available_fields = []
+        if profile.person.display_name.strip():
+            available_fields.append("姓名")
+        if profile.person.contact.phone:
+            available_fields.append("手机号")
+        if profile.person.contact.email:
+            available_fields.append("邮箱")
+        if any(item.institution and item.status.value in ("documented", "user_confirmed") for item in profile.education):
+            available_fields.append("已确认教育信息")
         return BrowserUseRunResult(
             success=True,
             job_id=job.job_id,
             status="simulated",
-            cdp_connected=cdp_connected,
+            cdp_connected=False,
             steps_count=0,
-            actions_taken=["inspect_form", "fill_name", "fill_phone", "fill_email", "upload_resume", "hard_stop"],
-            filled_fields=["姓名", "手机号", "邮箱", "学校", "专业", "学历", "定向简历附件"],
+            actions_taken=[],
+            filled_fields=available_fields,
             summary=(
-                "【模拟代填预览】已准备好当前档案核验字段及定制简历 PDF。\n"
-                f"安全红线策略已注入：完成代填后立即停止，绝不代点最终提交。\n"
-                f"CDP 调试端口状态：{'🟢 已连接 (端口 9222)' if cdp_connected else '🟡 未连接 (可直接启动 Chrome 调试端口)'}"
+                "【模拟代填预览】仅列出当前档案中可供核对的字段；"
+                "未检查招聘网页表单，也未核验或上传定向简历附件。"
             ),
             started_at=started_at,
             finished_at=datetime.now(UTC),
         )
 
+    cdp_connected = check_cdp_available(cdp_url)
     try:
         return asyncio.run(
             _run_agent_async(

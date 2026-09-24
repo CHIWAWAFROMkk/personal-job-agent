@@ -144,7 +144,7 @@ class DashboardStrategySummary(StrictModel):
 class DashboardSnapshot(StrictModel):
     schema_version: str = "phase13-dual-track-workshop-v1"
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    timezone: str = "Asia/Shanghai"
+    timezone: str = Field(default_factory=lambda: datetime.now().astimezone().strftime("%z"))
     source_name: str = "本地 SQLite"
     source_path: str
     source_freshness_at: datetime
@@ -156,6 +156,7 @@ class DashboardSnapshot(StrictModel):
     recent_feedback: list[DashboardFeedbackRow] = Field(default_factory=list)
     candidate_breakdown: list[DashboardBreakdownRow] = Field(default_factory=list)
     active_profile: DashboardProfileSummary | None = None
+    profile_error: bool = False
     strategy: DashboardStrategySummary
     action_token: str = ""
     caveats: list[str] = Field(default_factory=list)

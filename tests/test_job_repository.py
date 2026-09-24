@@ -334,6 +334,19 @@ class JobRepositoryTests(unittest.TestCase):
         self.assertEqual(restored.stats().jobs, 1)
         self.assertEqual(restored.application_summary().applied_or_later, 1)
 
+    def test_profile_switch_handles_existing_delete_journal_database(self) -> None:
+        job_id = self.repository.upsert_job(make_record()).job_id
+        self.repository.set_job_archived(job_id, True)
+        with self.repository._connection() as connection:
+            self.assertEqual(connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0], "delete")
+
+        backup = self.repository.backup_and_clear_for_new_profile(
+            self.database_path.parent / "backups"
+        )
+        self.assertEqual(self.repository.stats().jobs, 0)
+        self.assertEqual(self.repository.archived_jobs(), set())
+        self.assertEqual(JobRepository(backup).stats().jobs, 1)
+
     def test_search_candidate_dedupes_url_and_keeps_sightings(self) -> None:
         first = self.repository.upsert_search_candidate(make_candidate())
         second = self.repository.upsert_search_candidate(

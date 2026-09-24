@@ -38,7 +38,9 @@ export async function fetchLocal(path, options = {}) {
 export async function readApiResponse(response) {
   const data = await response.json().catch(() => null);
   if (!response.ok || data?.error) {
-    throw new ApiError(response.status, data?.code || 'request_failed', data?.error || `请求失败（HTTP ${response.status}），请刷新后重试。`);
+    const err = new ApiError(response.status, data?.code || 'request_failed', data?.error || `请求失败（HTTP ${response.status}），请刷新后重试。`);
+    err.data = data;
+    throw err;
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new ApiError(response.status, 'invalid_response', '服务返回了无法读取的数据，请刷新后重试。');

@@ -1,12 +1,17 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from job_agent.models.job import MatchResult, Recommendation, ScoreBreakdown
 from job_agent.models.job_record import JobRecordInput
 from job_agent.services.copilot_chat import (
+    COPILOT_AI_TIMEOUT_SECONDS,
     CopilotChatError,
+    _cloud_reply,
     build_safe_workspace_context,
     load_copilot_thread,
     reset_copilot_thread,
@@ -273,6 +278,127 @@ class CopilotChatTests(unittest.TestCase):
         self.assertTrue(snapshot.suggestions)
         self.assertTrue(any(f"#{self.job_id}" in item for item in snapshot.suggestions))
         self.assertLessEqual(len(snapshot.suggestions), 4)
+
+    def test_cloud_chat_quota_blocks_second_call_and_failed_call_releases_slot(self) -> None:
+        from job_agent.services.api_usage import load_api_usage
+        from job_agent.services.runtime_config import AIConnectorConfig, RuntimeConfig, save_runtime_config
+
+        save_runtime_config(
+            RuntimeConfig(ai=AIConnectorConfig(
+                provider="openai", model="test-model", api_key="test-only-key",
+                monthly_quota=1,
+            )),
+            self.runtime_path,
+        )
+        cloud = "job_agent.services.copilot_chat._cloud_reply"
+        with patch(cloud, side_effect=[RuntimeError("network failed"), ("云端答复", 2, 3)]) as reply:
+            first = respond_to_copilot(
+                "今天做什么？", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+            self.assertEqual(first.thread.messages[-1].provider, "local_fallback")
+            second = respond_to_copilot(
+                "这个岗位如何准备？", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+            self.assertEqual(second.thread.messages[-1].content, "云端答复")
+            self.assertEqual(reply.call_count, 2)
+            third = respond_to_copilot(
+                "再问一次", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+            self.assertEqual(third.thread.messages[-1].provider, "local_quota_fallback")
+            self.assertEqual(reply.call_count, 2)
+        usage = load_api_usage(self.usage_path)
+        self.assertEqual(usage.ai.successful_requests, 1)
+        self.assertEqual((usage.ai.input_tokens, usage.ai.output_tokens), (2, 3))
+
+    def test_sdk_success_without_usable_answer_still_counts_and_caps_next_call(self) -> None:
+        from job_agent.services.api_usage import load_api_usage
+        from job_agent.services.runtime_config import AIConnectorConfig, RuntimeConfig, save_runtime_config
+
+        save_runtime_config(RuntimeConfig(ai=AIConnectorConfig(
+            provider="openai", model="test-model", api_key="test-only-key", monthly_quota=1,
+        )), self.runtime_path)
+        created = []
+        def create(**_kwargs):
+            created.append(True)
+            return SimpleNamespace(output_text="", usage=SimpleNamespace(input_tokens=3, output_tokens=1))
+        client = SimpleNamespace(responses=SimpleNamespace(create=create))
+        with patch.dict(sys.modules, {"openai": SimpleNamespace(OpenAI=lambda **_kwargs: client)}):
+            first = respond_to_copilot(
+                "今天做什么？", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+            second = respond_to_copilot(
+                "再问一次", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+        self.assertEqual(len(created), 1)
+        self.assertEqual(first.thread.messages[-1].provider, "local_fallback")
+        self.assertEqual(second.thread.messages[-1].provider, "local_quota_fallback")
+        counter = load_api_usage(self.usage_path).ai
+        self.assertEqual((counter.successful_requests, counter.input_tokens, counter.output_tokens), (1, 3, 1))
+
+    def test_damaged_usage_record_keeps_chat_local_without_cloud_request(self) -> None:
+        from job_agent.services.runtime_config import AIConnectorConfig, RuntimeConfig, save_runtime_config
+
+        save_runtime_config(
+            RuntimeConfig(ai=AIConnectorConfig(
+                provider="openai", model="test-model", api_key="test-only-key",
+                monthly_quota=1,
+            )),
+            self.runtime_path,
+        )
+        self.usage_path.parent.mkdir(parents=True, exist_ok=True)
+        self.usage_path.write_text("{damaged", encoding="utf-8")
+        with patch("job_agent.services.copilot_chat._cloud_reply") as cloud:
+            snapshot = respond_to_copilot(
+                "今天做什么？", thread_path=self.thread_path,
+                repository=self.repository, profile_path=self.profile_path,
+                runtime_config_path=self.runtime_path, usage_path=self.usage_path,
+            )
+        cloud.assert_not_called()
+        self.assertIn("用量记录无法读取", snapshot.thread.messages[-1].content)
+
+    def test_cloud_chat_sdk_has_bounded_timeout_and_no_automatic_retries(self) -> None:
+        from job_agent.services.runtime_config import AIConnectorConfig, RuntimeConfig
+
+        constructed = []
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                constructed.append(kwargs)
+                usage = SimpleNamespace(input_tokens=1, output_tokens=2)
+                self.responses = SimpleNamespace(create=lambda **_kw: SimpleNamespace(
+                    output_text="已确认", usage=usage,
+                ))
+                self.chat = SimpleNamespace(completions=SimpleNamespace(
+                    create=lambda **_kw: SimpleNamespace(
+                        choices=[SimpleNamespace(message=SimpleNamespace(content="已确认"))],
+                        usage=usage,
+                    ),
+                ))
+
+        for provider in ("openai", "deepseek", "openai_compatible"):
+            with self.subTest(provider=provider):
+                config = RuntimeConfig(ai=AIConnectorConfig(
+                    provider=provider, model="test-model", api_key="test-only-key",
+                    base_url="https://example.invalid/v1" if provider == "openai_compatible" else None,
+                ))
+                with patch.dict(sys.modules, {"openai": SimpleNamespace(OpenAI=FakeOpenAI)}):
+                    text, input_tokens, output_tokens = _cloud_reply(
+                        config, load_copilot_thread(self.thread_path),
+                        "测试消息", {"selected_job_id": None},
+                    )
+                self.assertEqual((text, input_tokens, output_tokens), ("已确认", 1, 2))
+                self.assertEqual(constructed[-1]["timeout"], COPILOT_AI_TIMEOUT_SECONDS)
+                self.assertEqual(constructed[-1]["max_retries"], 0)
 
 
 if __name__ == "__main__":

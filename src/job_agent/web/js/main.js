@@ -1,10 +1,12 @@
 import { fetchLocal as fetch, readApiResponse } from './api.js';
 import { coalesceRefresh } from './state.js';
+import { installGlobalFeedback } from './global-feedback.js';
 import { elements } from './elements.js';
 import { createResumeTailor } from './resume-tailor.js';
 import { createTracking } from './tracking.js';
 import { createMockInterview } from './mock-interview.js';
-import { createManualCode } from './manual-code.js';
+import { createReviewDialog } from './review-dialog.js';
+import { createPrepareController } from './prepare-controller.js';
 import { renderProfile, prefillProfileForm, syncProfileRequirements, prefillPreferencesForm } from './profile.js';
 
 import {
@@ -28,7 +30,13 @@ import {
     let copilotBusy = false;
 
     function usageText(counter) {
-      const used = Number(counter?.successful_requests || 0);
+      if (counter?.record_status === "unavailable") {
+        return "用量记录需修复，云端调用暂停";
+      }
+      if (counter?.successful_requests == null) {
+        return "用量记录尚不可用";
+      }
+      const used = Number(counter.successful_requests);
       if (counter?.local_remaining !== null && counter?.local_remaining !== undefined) {
         return `<strong>${escapeHtml(counter.local_remaining)}</strong> 次本机可用 · 已记录 ${escapeHtml(used)} 次成功请求`;
       }
@@ -75,6 +83,9 @@ import {
       const search = settings?.search || { provider: "none", ready: true, enabled: false };
       const maps = settings?.maps || { provider: "none", ready: true, enabled: false };
       const usage = settings?.usage?.connectors || {};
+      const aiUsageBlocked = ["openai", "openai_compatible", "deepseek"].includes(ai.provider) && usage.ai?.record_status === "unavailable";
+      const searchUsageBlocked = search.enabled && usage.search?.record_status === "unavailable";
+      const mapUsageBlocked = maps.enabled && usage.maps?.record_status === "unavailable";
       elements.aiProvider.value = ai.provider || "local";
       elements.aiModel.value = ai.provider === "local" ? "" : (ai.model || "");
       elements.aiBaseUrl.value = ai.base_url || "";
@@ -91,29 +102,29 @@ import {
       elements.mapMonthlyQuota.value = maps.monthly_quota || "";
       syncConnectorFields();
 
-      elements.aiStatusTitle.textContent = ai.provider === "local"
+      elements.aiStatusTitle.textContent = aiUsageBlocked ? "AI 用量记录需修复" : ai.provider === "local"
         ? "本地能力可用"
         : ai.ready ? "AI 已配置" : ai.provider === "codex" ? "未找到 Codex CLI" : "等待密钥";
       elements.aiStatusDetail.textContent = ai.provider === "local"
         ? "本地可解释评分，不产生 API 费用"
         : `${aiProviderLabels[ai.provider] || ai.provider} · ${ai.model || "模型未填写"}${ai.provider === "codex" ? " · 使用本机登录，首次调用时验证" : ai.api_key_configured ? " · 密钥已保存，首次调用时验证" : ""}`;
-      elements.aiStatusDot.classList.toggle("ready", Boolean(ai.ready));
+      elements.aiStatusDot.classList.toggle("ready", Boolean(ai.ready && !aiUsageBlocked));
 
-      elements.searchStatusTitle.textContent = !search.enabled
+      elements.searchStatusTitle.textContent = searchUsageBlocked ? "搜索用量记录需修复" : !search.enabled
         ? "手动导入模式"
         : search.ready ? "搜索可用" : "等待密钥";
       elements.searchStatusDetail.textContent = !search.enabled
         ? "不消耗搜索额度"
         : `${searchProviderLabels[search.provider] || search.provider}${search.api_key_configured ? " · 密钥已配置" : " · 尚未配置密钥"}`;
-      elements.searchStatusDot.classList.toggle("ready", Boolean(search.ready));
+      elements.searchStatusDot.classList.toggle("ready", Boolean(search.ready && !searchUsageBlocked));
 
-      elements.mapStatusTitle.textContent = !maps.enabled
+      elements.mapStatusTitle.textContent = mapUsageBlocked ? "地图用量记录需修复" : !maps.enabled
         ? "手动通勤模式"
         : maps.ready ? "路线计算可用" : "等待密钥";
       elements.mapStatusDetail.textContent = !maps.enabled
         ? "不发送地址，可手动记录分钟"
         : `${mapProviderLabels[maps.provider] || maps.provider}${maps.api_key_configured ? " · 密钥已配置" : " · 尚未配置密钥"}`;
-      elements.mapStatusDot.classList.toggle("ready", Boolean(maps.ready));
+      elements.mapStatusDot.classList.toggle("ready", Boolean(maps.ready && !mapUsageBlocked));
       elements.aiUsageLine.innerHTML = usageText(usage.ai);
       elements.searchUsageLine.innerHTML = usageText(usage.search);
       elements.mapUsageLine.innerHTML = usageText(usage.maps);
@@ -121,11 +132,12 @@ import {
       elements.aiBalanceLink.hidden = ai.provider !== "openai";
       elements.searchBalanceLink.hidden = search.provider !== "bocha";
 
-      const allReady = Boolean(ai.ready && search.ready && maps.ready);
+      const usageBlocked = aiUsageBlocked || searchUsageBlocked || mapUsageBlocked;
+      const allReady = Boolean(ai.ready && search.ready && maps.ready && !usageBlocked);
       elements.connectorSummaryDot.classList.toggle("ready", allReady);
       elements.connectorSummaryText.textContent = allReady
         ? (ai.provider === "local" && !search.enabled ? "本地模式" : "配置已就绪")
-        : "需要设置 API";
+        : usageBlocked ? "用量记录需修复" : "需要设置 API";
     }
 
     async function loadConnectorSettings() {
@@ -322,6 +334,10 @@ import {
 
     let selectedJobId = null;
     let jobFilter = "all";
+    const JOBS_PAGE_SIZE = 60;
+    let jobPage = 0;
+    let jobSearchTimer = null;
+    const candidateQueueState = {page: 0, items: [], total: 0};
     let jobTrack = null;
     let detailRequest = 0;
     let detailTab = "jd";
@@ -330,6 +346,7 @@ import {
     const composerDrafts = new Map();
     const $ = (id) => document.getElementById(id);
     const pendingStatuses = new Set(["discovered", "saved", "ready_to_apply", "matched", "recommended"]);
+    const activePreparingJobIds = new Set();
     let homeSnapshot = null;
     let currentView = "today";
     let navigationReady = false;
@@ -339,16 +356,22 @@ import {
       if (!navigationReady) return;
       if (currentView === "jobs" && !$("jobWorkspace").classList.contains("detail-visible")) listPosition = elements.jobs.scrollTop;
       history.replaceState({...history.state, filter: jobFilter, track: jobTrack,
-        query: $("jobSearch").value, listPosition, tab: detailTab}, "");
+        query: $("jobSearch").value, listPosition, page: jobPage, tab: detailTab}, "");
     }
 
     function navigate(view, jobId = null, restoring = false, state = null) {
       if (!restoring) rememberNavigation();
+      if (view === "jobs" && jobId != null && !currentJobs.some(job => String(job.job_id) === String(jobId))) {
+        jobId = null;
+        if (restoring) history.replaceState({...history.state, view: "jobs", jobId: null}, "", "#jobs");
+        showError("这个岗位不存在或已移除，请从职位列表重新选择。");
+      }
       if (state) {
         jobFilter = state.filter || "all";
         jobTrack = state.track || "all";
         $("jobSearch").value = state.query || "";
         listPosition = state.listPosition || 0;
+        jobPage = Number(state.page) || 0;
       }
       currentView = view;
       $("todayPanel").hidden = view !== "today";
@@ -369,9 +392,8 @@ import {
       elements.openCopilotButton.setAttribute("aria-expanded", "false");
       $("jobWorkspace").classList.toggle("detail-visible", view === "jobs" && jobId != null);
       if (view === "jobs") {
-        renderJobs(currentJobs);
+        renderJobs(currentJobs, {focusJobId: jobId});
         if (jobId != null) {
-          selectJob(jobId, false);
           detailTab = state?.tab || "jd";
         } else requestAnimationFrame(() => { elements.jobs.scrollTop = listPosition; });
       }
@@ -393,36 +415,64 @@ import {
       return `<article class="today-job"><div class="today-job-body"><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(job.company)} · ${escapeHtml(job.location || "地点待确认")}</p><div class="today-job-facts"><span>${escapeHtml(compensationText(job))}</span><span>通勤 ${escapeHtml(commuteText(job))}</span>${job.deadline_urgent ? `<strong>剩 ${escapeHtml(job.deadline_days)} 天</strong>` : ""}</div>${note ? `<p class="today-job-note">${escapeHtml(note)}</p>` : ""}</div><button class="action-button secondary" type="button" data-home-job="${job.job_id}" data-home-tab="${tab}">${action}</button></article>`;
     }
 
-    function homeFocus(job, total) {
+    function homeFocus(job, total, recommended = true) {
       if (!job) return "";
       const deadline = job.deadline_days != null ? `${escapeHtml(job.deadline_days)} 天` : "待核实";
       return `<section class="today-focus" aria-labelledby="todayFocusTitle">
-        <header class="today-focus-head"><div><h2 id="todayFocusTitle">${escapeHtml(job.title)}</h2><p>${escapeHtml(job.company)} · ${escapeHtml(job.location || "地点待确认")}</p></div><span class="today-focus-score" aria-label="本地匹配参考 ${escapeHtml(job.match_score ?? "未知")} 分">${escapeHtml(job.match_score ?? "—")}<small>/100</small></span></header>
+        <span class="today-focus-label">${recommended ? "建议优先查看" : "下一步：核对岗位"}</span>
+        <header class="today-focus-head"><div><h2 id="todayFocusTitle">${escapeHtml(job.title)}</h2><p>${escapeHtml(job.company)} · ${escapeHtml(job.location || "地点待确认")}</p></div>${job.match_score != null ? `<span class="today-focus-score" aria-label="本地匹配参考 ${escapeHtml(job.match_score)} 分">${escapeHtml(job.match_score)}<small>/100</small></span>` : ""}</header>
         <dl class="today-focus-facts"><div><dt>薪资</dt><dd>${escapeHtml(compensationText(job))}</dd></div><div><dt>单程通勤</dt><dd>${escapeHtml(commuteText(job))}</dd></div><div><dt>截止</dt><dd>${deadline}</dd></div></dl>
-        <p class="today-focus-reason">${escapeHtml((job.strategy_reasons || [])[0] || "先核实岗位要求与硬门槛，再决定是否投入准备时间。")}</p>
-        <div class="today-focus-actions"><button class="action-button" type="button" data-home-job="${job.job_id}" data-home-tab="jd">查看并决定</button><button class="action-button secondary" type="button" data-home-action="jobs">全部职位</button></div>
-        <p class="section-note">这是 ${total} 个待投岗位中的当前优先项；推荐仅供判断，不代表满足全部要求。</p>
+        <p class="today-focus-reason">${recommended ? escapeHtml((job.strategy_reasons || [])[0] || "先核实岗位要求与硬门槛，再决定是否投入准备时间。") : "这条岗位还没有形成推荐结论。先核对招聘信息，再决定是否准备材料。"}</p>
+        <div class="today-focus-actions"><button class="action-button" type="button" data-home-job="${job.job_id}" data-home-tab="jd">${recommended ? "查看并决定" : "查看岗位并准备"}</button><button class="action-button secondary" type="button" data-home-action="jobs">全部职位</button></div>
+        <p class="section-note">${recommended ? `这是 ${total} 个待投岗位中的当前优先项；推荐仅供判断，不代表满足全部要求。` : "材料需根据真实经历生成并由你核对；投递由你在招聘网站完成。"}</p>
       </section>`;
     }
 
     function renderHome(data) {
       homeSnapshot = data;
+      if (data.profile_error) {
+        $("todayTitle").textContent = "个人资料需要修复";
+        $("todayContent").innerHTML = '<section class="setup-guide" role="alert"><h2>已保存的资料无法读取</h2><p>职位和投递记录仍在本机。请先保留并备份原有数据，再修复资料或重新导入已核实的简历；不要直接覆盖未知内容。</p></section>';
+        return;
+      }
       const profile = data.active_profile;
       const jobs = (data.jobs_to_apply || []).filter(j => !j.job_archived && !j.has_applied && j.strategy_fit !== "blocked" && j.commute_fit !== "over_limit");
       const feedback = (data.recent_feedback || []).slice(0, 3);
       const prep = (data.priority_preparation || []).filter(p => !currentJobs.find(j => j.job_id === p.job_id)?.job_archived && ["resume_requested","screening","assessment","written_test","interview_1","interview_2","final_interview"].includes(p.application_status)).slice(0, 3);
       const needsProfile = !profile || !profile.confirmed_fact_count;
       const needsGoals = profile && !(profile.target_roles || []).length;
-      $("todayTitle").textContent = needsProfile ? "先让 Agent 认识你" : "今天，先推进一个岗位";
+      $("todayTitle").textContent = needsProfile ? "开始你的求职准备" : "今天要做的事";
       $("todayContext").textContent = profile ? `${(profile.target_roles || []).slice(0, 2).join(" / ") || "求职方向待设置"} · ${(profile.preferred_locations || []).join("、") || "地点待设置"}` : "从真实简历开始，建立属于你的求职工作台。";
       const setup = needsProfile || needsGoals;
-      const setupContent = `<section class="setup-guide"><h2>${needsProfile ? "导入你的真实简历" : "你想找什么工作？"}</h2><p>${needsProfile ? "确认经历后，再按你的方向寻找和匹配岗位。" : "设置方向、城市和通勤范围，让推荐与你有关。"}</p><ol class="setup-steps"><li ${needsProfile ? 'aria-current="step"' : ''}>导入简历</li><li ${needsGoals ? 'aria-current="step"' : ''}>确认目标</li><li>选择服务</li><li>查看岗位</li></ol><button class="action-button" type="button" data-home-action="${needsProfile ? "profile" : "preferences"}">${needsProfile ? "导入简历" : "设置目标"}</button><p class="quiet">连接 AI 和搜索服务是可选步骤，也可以先使用本地能力。</p></section>`;
-      const focus = jobs[0];
+      $("todayPanel").querySelector('[data-home-action="refresh"]').hidden = setup || !currentJobs.length;
+      const step = needsProfile || needsGoals ? 1 : currentJobs.length ? 3 : 2;
+      const guide = `<ol class="start-steps" aria-label="开始求职的三个步骤">${[
+        ["建立资料", "导入真实简历，填写目标岗位和城市。"],
+        ["添加岗位", "粘贴招聘岗位说明，或手动填写岗位信息。"],
+        ["准备简历", "选中岗位生成草稿，核对 PDF 后自行投递。"]
+      ].map(([title, copy], i) => `<li ${step === i + 1 ? 'aria-current="step"' : ''}><span class="start-step-number">${i + 1}</span><div><strong>${title}</strong><p>${copy}</p></div></li>`).join("")}</ol>`;
+      const setupContent = `<section class="setup-guide" aria-label="新用户引导"><h2>${needsProfile ? "从你的简历开始" : needsGoals ? "补充求职方向" : "添加第一个岗位"}</h2><p>${needsProfile ? "准备一份 PDF、Word 或文本简历。无需配置 AI 或上传照片。" : needsGoals ? "填好目标岗位和城市，再添加你感兴趣的职位。" : "找到感兴趣的招聘信息后，复制岗位说明到这里。无需连接搜索服务。"}</p>${guide}<button class="action-button" type="button" data-home-action="${needsProfile ? "profile" : needsGoals ? "preferences" : "import"}">${needsProfile ? "导入简历并建立资料" : needsGoals ? "填写求职方向" : "添加第一个岗位"}</button><p class="section-note">资料保存在本机。生成内容需要你核对，登录、验证码和最终投递由你在招聘网站完成。</p></section>`;
+      if (setup || !currentJobs.length) {
+        $("todayContent").innerHTML = setupContent;
+        $("todayTitle").textContent = setup ? "开始你的求职准备" : "资料已就绪，添加一个岗位";
+        return;
+      }
+      const unreviewed = currentJobs.find(j => !j.job_archived && !j.has_applied
+        && j.strategy_fit !== "blocked" && j.commute_fit !== "over_limit"
+        && pendingStatuses.has(j.status));
+      const focus = jobs[0] || unreviewed;
       const later = jobs.slice(1, 3);
       const queue = later.map(j => homeRow(j, "查看")).join("");
-      const noJobs = currentJobs.length ? "暂无进入待投队列的岗位，可查看全部或调整条件。" : "还没有岗位。当前搜索需通过命令行或外部助手运行，完成后在这里刷新；连接服务不会自动开始搜索。";
-      $("todayContent").innerHTML = `${setup ? setupContent : ""}<div class="today-grid"><section class="today-shortlist" aria-label="今日岗位">${focus ? homeFocus(focus, jobs.length) : `<div class="task-empty"><p>${noJobs}</p><button class="action-button secondary" type="button" data-home-action="${currentJobs.length ? "preferences" : "settings"}">${currentJobs.length ? "调整条件" : "连接服务"}</button></div>`}${queue ? `<details class="today-queue"><summary><span>接下来再处理</span><small>${later.length} 个岗位</small></summary><div>${queue}</div></details>` : ""}</section><aside class="today-side" aria-label="反馈与准备"><section><div class="section-heading"><h2>最新反馈</h2><button class="action-button secondary" type="button" data-home-action="progress">查看进度</button></div>${feedback.length ? feedback.map(r => `<button class="feedback-row" type="button" data-home-job="${r.job_id}" data-home-tab="progress"><strong class="feedback-company">${escapeHtml(r.company)}</strong><span class="feedback-role">${escapeHtml(r.title)}</span><span class="feedback-meta">${escapeHtml(statusLabels[r.status] || r.status)} · ${escapeHtml(formatDateTime(r.occurred_at))}</span></button>`).join("") : '<p class="task-empty">暂无已记录的新反馈。</p>'}<p class="section-note">以已核实或补录的记录为准，不是网站实时状态。</p></section><section><div class="section-heading"><h2>需要准备</h2></div>${prep.length ? prep.map(r => `<button class="feedback-row" type="button" data-home-job="${r.job_id}" data-home-tab="prep"><strong class="feedback-company">${escapeHtml(r.company)}</strong><span class="feedback-role">${escapeHtml(r.title)}</span><span class="feedback-meta">${escapeHtml(statusLabels[r.application_status] || r.application_status)} · 准备任务</span></button>`).join("") : '<p class="task-empty">暂无优先准备任务。进入筛选、测评或面试后，在这里集中处理。</p>'}</section></aside></div>`;
-      $("todayContent").querySelector(".today-grid").hidden = setup;
+      const allApplied = currentJobs.some(j => j.has_applied) && currentJobs.every(j => j.has_applied || j.job_archived);
+      const allFiltered = !allApplied && currentJobs.some(j => !j.job_archived && !j.has_applied
+        && (j.strategy_fit === "blocked" || j.commute_fit === "over_limit"));
+      const noJobs = allApplied ? "当前岗位已投递。查看后续进度，或添加新的岗位。"
+        : allFiltered ? "当前岗位触发了已设置的筛选条件，请查看原因或添加新岗位。"
+        : "当前没有待处理岗位，可以添加一个新的岗位。";
+      const emptyAction = allApplied ? ["progress", "查看投递进度"]
+        : allFiltered ? ["jobs", "查看全部岗位"] : ["import", "添加岗位"];
+      $("todayContent").innerHTML = `<details id="startGuide" class="start-guide"><summary>使用指南：从资料到投递</summary>${guide}<p>需要 AI 改写时再到设置中连接服务。面试准备等辅助功能在更多工具中。</p></details><div class="today-grid"><section class="today-shortlist" aria-label="今日岗位">${focus ? homeFocus(focus, jobs.length, Boolean(jobs.length && focus.match_score != null)) : `<div class="task-empty"><p>${noJobs}</p><button class="action-button" type="button" data-home-action="${emptyAction[0]}">${emptyAction[1]}</button></div>`}${queue ? `<details class="today-queue"><summary><span>接下来再处理</span><small>${later.length} 个岗位</small></summary><div>${queue}</div></details>` : ""}</section><aside class="today-side" aria-label="反馈与准备"><section><div class="section-heading"><h2>最新反馈</h2><button class="action-button secondary" type="button" data-home-action="progress">查看进度</button></div>${feedback.length ? feedback.map(r => `<button class="feedback-row" type="button" data-home-job="${r.job_id}" data-home-tab="progress"><strong class="feedback-company">${escapeHtml(r.company)}</strong><span class="feedback-role">${escapeHtml(r.title)}</span><span class="feedback-meta">${escapeHtml(statusLabels[r.status] || r.status)} · ${escapeHtml(formatDateTime(r.occurred_at))}</span></button>`).join("") : '<p class="task-empty">暂无已记录的新反馈。</p>'}<p class="section-note">以已核实或补录的记录为准，不是网站实时状态。</p></section><section><div class="section-heading"><h2>需要准备</h2></div>${prep.length ? prep.map(r => `<button class="feedback-row" type="button" data-home-job="${r.job_id}" data-home-tab="prep"><strong class="feedback-company">${escapeHtml(r.company)}</strong><span class="feedback-role">${escapeHtml(r.title)}</span><span class="feedback-meta">${escapeHtml(statusLabels[r.application_status] || r.application_status)} · 准备任务</span></button>`).join("") : '<p class="task-empty">暂无优先准备任务。进入筛选、测评或面试后，在这里集中处理。</p>'}</section></aside></div>`;
+      $("todayContent").querySelector(".today-side").hidden = !feedback.length && !prep.length;
       for (const button of $("todayContent").querySelectorAll(".feedback-row")) {
         const row = document.createElement("article");
         row.className = "feedback-item";
@@ -439,28 +489,46 @@ import {
       navigate(overview ? "progress" : "jobs");
     }
 
-    function renderJobs(jobs) {
+    function renderJobs(jobs, {resetPage = false, focusJobId = null} = {}) {
       currentJobs = jobs;
+      if (resetPage) jobPage = 0;
       const query = $("jobSearch").value.trim().toLocaleLowerCase();
-      const visible = jobs.filter((job) => {
+      let visible = jobs.filter((job) => {
         const pending = !job.job_archived && !job.has_applied && pendingStatuses.has(job.status);
         return (jobTrack === "all" || jobTrack === null || job.opportunity_track === jobTrack)
           && (jobFilter === "all" || (jobFilter === "pending" ? pending : jobFilter === "archived" ? job.job_archived : job.has_applied))
           && (job.company + " " + job.title + " #" + job.job_id).toLocaleLowerCase().includes(query);
       }).sort((a, b) => Number(Boolean(a.job_archived)) - Number(Boolean(b.job_archived)) || Number(Boolean(a.has_applied)) - Number(Boolean(b.has_applied)));
+      if (focusJobId != null && !visible.some(job => String(job.job_id) === String(focusJobId))
+          && jobs.some(job => String(job.job_id) === String(focusJobId))) {
+        jobFilter = "all";
+        jobTrack = "all";
+        $("jobSearch").value = "";
+        return renderJobs(jobs, {resetPage: true, focusJobId});
+      }
+      const focusedIndex = focusJobId == null ? -1 : visible.findIndex(job => String(job.job_id) === String(focusJobId));
+      if (focusedIndex >= 0) jobPage = Math.floor(focusedIndex / JOBS_PAGE_SIZE);
+      const pageCount = Math.max(1, Math.ceil(visible.length / JOBS_PAGE_SIZE));
+      jobPage = Math.max(0, Math.min(jobPage, pageCount - 1));
+      const pageStart = jobPage * JOBS_PAGE_SIZE;
+      const pageItems = visible.slice(pageStart, pageStart + JOBS_PAGE_SIZE);
       const group = job => job.job_archived ? "已失效 · 沉底" : job.has_applied ? "已投递" : "待投递与其他岗位";
+      const groupCounts = new Map();
+      for (const job of visible) groupCounts.set(group(job), (groupCounts.get(group(job)) || 0) + 1);
+      const desiredJobId = focusedIndex >= 0 ? Number(focusJobId)
+        : pageItems.some(job => job.job_id === selectedJobId) ? selectedJobId : pageItems[0]?.job_id ?? null;
+      if (desiredJobId !== selectedJobId) selectJob(desiredJobId, false);
       elements.jobsCount.textContent = String(visible.length);
       document.querySelectorAll("[data-job-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobFilter === jobFilter)));
       document.querySelectorAll("[data-job-track]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.jobTrack === jobTrack)));
-      elements.jobs.innerHTML = visible.length ? visible.map((job, index) => `
-        ${index === 0 || group(job) !== group(visible[index - 1]) ? `<h3 class="job-group-title">${group(job)} · ${visible.filter(item => group(item) === group(job)).length}</h3>` : ""}
+      elements.jobs.innerHTML = pageItems.length ? pageItems.map((job, index) => `
+        ${index === 0 || group(job) !== group(pageItems[index - 1]) ? `<h3 class="job-group-title">${group(job)} · ${groupCounts.get(group(job))}</h3>` : ""}
         <button class="job-choice${job.has_applied ? " is-applied" : ""}" type="button" data-select-job="${job.job_id}" aria-current="${String(job.job_id) === String(selectedJobId) ? "true" : "false"}">
           <strong class="choice-title" title="${escapeHtml(job.title)}">${job.job_archived ? '<span class="ignored-company-mark" role="img" aria-label="岗位已失效"></span>' : ""}${escapeHtml(job.title)}</strong>
           <span class="choice-company">${escapeHtml(job.company)}<span class="choice-score" title="本地匹配分，满分 100">${escapeHtml(job.match_score ?? "—")}</span></span>
           <span class="choice-signals"><span>${escapeHtml(trackLabels[job.opportunity_track] || "其他机会")}</span><span class="${escapeHtml(strategyBadgeClass(job.strategy_fit))}">${escapeHtml(strategyFitLabels[job.strategy_fit] || "待判断")}</span></span>
           <span class="choice-meta"><span>${escapeHtml(job.location || "地点待确认")}</span><span>${job.has_applied && job.status !== "applied" ? "已投递 · " : ""}${escapeHtml(statusLabels[job.status] || job.status)}</span></span>
-        </button>`).join("") : '<div class="empty-state">没有符合条件的职位。<button type="button" class="text-link" data-clear-search>清除筛选</button></div>';
-      if (!currentJobs.some(job => String(job.job_id) === String(selectedJobId))) selectJob(visible[0]?.job_id ?? null, false);
+        </button>`).join("") + (pageCount > 1 ? `<nav class="job-list-pagination" aria-label="职位列表翻页"><span>${pageStart + 1}–${pageStart + pageItems.length} / ${visible.length}</span><div><button type="button" data-jobs-page="-1" ${jobPage === 0 ? "disabled" : ""}>上一页</button><button type="button" data-jobs-page="1" ${jobPage >= pageCount - 1 ? "disabled" : ""}>下一页</button></div></nav>` : "") : '<div class="empty-state">没有符合条件的职位。<button type="button" class="text-link" data-clear-search>清除筛选</button></div>';
     }
 
     function renderStrategyPlan(strategy) {
@@ -496,7 +564,29 @@ import {
       const w = job.workspace || {};
       const status = w.resume_status || "missing";
       const external = safeExternalUrl(job.source_url);
-      const step = job.job_archived ? ["archive-job", "恢复岗位", "这个岗位已失效"] : job.has_applied ? ["status", "更新进度", "已投递，等待或补录反馈"] : status === "missing" ? ["create-resume", "生成草稿", "下一步：准备岗位简历"] : status === "needs_review" ? ["open-resume", "审阅 PDF", "下一步：核对简历内容"] : w.safe_fill_ready ? ["manual-apply", "前往投递", "下一步：打开岗位和简历"] : ["approve-resume", "准备材料", "下一步：整理投递材料"];
+
+      // 两个动作：① 准备投递 ② 审阅并打开招聘页
+      const isPreparing = activePreparingJobIds.has(Number(job.job_id));
+      const packReady = status === "ready" || (status === "needs_review" && w.application_pack_path);
+      const isPartialPack = status === "ready" && !w.application_pack_ready;
+      const step = job.job_archived
+        ? ["archive-job", "恢复岗位", "这个岗位已失效"]
+        : job.has_applied
+        ? ["status", "更新进度", "已投递，等待或补录反馈"]
+        : isPartialPack
+        ? ["review-and-open", "🔄 完成材料包同步", "下一步：简历已通过核对，继续完成材料包并打开招聘页"]
+        : (status === "missing" || status === "needs_generation")
+        ? ["prepare", isPreparing ? "准备中…" : "准备投递", "下一步：一次完成简历、材料和招呼语"]
+        : packReady || status === "needs_review"
+        ? ["review-and-open", external ? "审阅并打开招聘页" : "审阅投递材料", external ? "下一步：核对内容后打开招聘页" : "下一步：核对投递材料"]
+        : ["prepare", isPreparing ? "准备中…" : "准备投递", "下一步：整理投递材料"];
+      const stepDesc = isPartialPack
+        ? "简历已通过人工审阅并落盘，材料包尚未同步完成。点击继续生成材料包并打开招聘页。"
+        : step[0] === "prepare"
+        ? "Agent 后台完成匹配→简历→招呼语→材料包，全程可见进度。登录与提交由你完成。"
+        : step[0] === "review-and-open"
+        ? (external ? "在同一面板查看 PDF 和招呼语，确认后打开招聘页，文件夹同步选中。" : "核对 PDF 和招呼语后批准材料。此岗位没有招聘链接，请自行找到申请入口。")
+        : "登录、上传和最终提交由你完成。";
       $("jobDetail").innerHTML = `
         <div class="detail-navigation"><button class="detail-back action-button secondary" type="button" data-detail-action="back">返回</button></div>
         <div class="detail-scroll">
@@ -507,9 +597,22 @@ import {
             <dl class="decision-facts"><div><dt>薪资</dt><dd>${escapeHtml(compensationText(job))}</dd></div><div><dt>单程通勤</dt><dd>${escapeHtml(commuteText(job))}</dd></div><div><dt>匹配参考</dt><dd>${escapeHtml(job.match_score ?? "—")} / 100</dd></div><div><dt>截止</dt><dd>${job.deadline_days != null ? `${escapeHtml(job.deadline_days)} 天` : "日期待核实"}</dd></div></dl>
             <section class="decision-summary" aria-label="投递判断"><h3>${job.job_archived ? "岗位已失效" : job.strategy_fit === "blocked" ? "存在不符合的条件" : "先判断是否值得投"}</h3><p id="decisionReason">正在读取匹配依据…</p><p id="decisionWarnings" class="decision-warning"></p></section>
           </header>
-          <section class="next-action" aria-label="岗位专属任务"><div><h3>${step[2]}</h3><p>${status === "needs_review" ? "先打开 PDF 检查，再确认可用于申请。" : "登录、上传和最终提交由你完成。"}</p></div><div class="task-controls"><button class="action-button resume-task" type="button" data-detail-action="${step[0]}">${step[1]}</button>${status === "needs_review" && !job.job_archived ? '<button class="action-button secondary" type="button" data-detail-action="approve-resume">确认审阅</button>' : ""}<button class="action-button secondary" type="button" data-detail-action="open-page" ${external ? "" : "disabled"}>打开招聘页</button><button class="action-button secondary" type="button" data-detail-action="browser-use-assist">🤖 AI 代填</button><button class="action-button secondary" type="button" data-detail-action="outreach-greetings">💬 打招呼语</button><button class="action-button secondary" type="button" data-detail-action="interview-prep">🎯 面试真题与防御</button></div></section>
+          <section class="next-action" aria-label="岗位专属任务">
+            <div><h3>${step[2]}</h3><p>${stepDesc}</p></div>
+            <div class="task-controls">
+              <button class="action-button resume-task" type="button" data-detail-action="${step[0]}" ${isPreparing ? "disabled" : ""}>${step[1]}</button>
+              <button class="action-button secondary" type="button" data-detail-action="open-page" ${external ? "" : "disabled"}>打开招聘页</button>
+            </div>
+            <div id="prepareProgress" class="prepare-progress" ${isPreparing ? "" : "hidden"} aria-live="polite">
+              ${isPreparing ? `
+              <div class="prepare-indicator">
+                <span class="prepare-spinner" aria-hidden="true"></span>
+                <span>正在准备投递材料（匹配分析、专属简历、打招呼语与材料包）… 请留在页面稍候</span>
+              </div>` : ""}
+            </div>
+          </section>
           ${!external ? '<p class="decision-warning">缺少有效招聘链接，暂时无法打开招聘页。</p>' : ""}
-          <details class="job-more"><summary>更多操作</summary><div class="task-controls">${w.resume_editable ? '<button class="action-button secondary" type="button" data-detail-action="edit-resume">编辑简历</button><button class="action-button secondary" type="button" data-detail-action="ask-agent-resume">AI 修改</button><button class="action-button secondary" type="button" data-detail-action="open-resume">打开 PDF</button>' : ""}<button class="action-button secondary" type="button" data-detail-action="status">更新进度</button><button class="action-button secondary" type="button" data-detail-action="commute">计算通勤</button><button class="action-button secondary" type="button" data-detail-action="interview">面试准备</button>${!job.job_archived ? '<button class="action-button secondary" type="button" data-detail-action="archive-job">标记失效</button>' : ""}</div></details>
+          <details class="job-more"><summary>更多工具与操作</summary><div class="task-controls"><button class="action-button secondary" type="button" data-detail-action="browser-use-assist">投递字段预览</button><button class="action-button secondary" type="button" data-detail-action="outreach-greetings">💬 打招呼语</button><button class="action-button secondary" type="button" data-detail-action="interview-prep">🎯 面试真题与防御</button>${w.resume_editable ? '<button class="action-button secondary" type="button" data-detail-action="edit-resume">编辑简历</button><button class="action-button secondary" type="button" data-detail-action="ask-agent-resume">AI 修改</button><button class="action-button secondary" type="button" data-detail-action="open-resume">打开 PDF</button>' : ""}<button class="action-button secondary" type="button" data-detail-action="status">更新进度</button><button class="action-button secondary" type="button" data-detail-action="commute">计算通勤</button><button class="action-button secondary" type="button" data-detail-action="interview">面试准备</button>${!job.job_archived ? '<button class="action-button secondary" type="button" data-detail-action="archive-job">标记失效</button>' : ""}</div></details>
           <nav class="detail-tabs" aria-label="职位详情">
             <button type="button" data-detail-tab="jd" aria-pressed="true">职位描述</button>
             <button type="button" data-detail-tab="match" aria-pressed="false">匹配依据 <span>${escapeHtml(job.match_score ?? "—")}</span></button>
@@ -629,6 +732,63 @@ import {
         }).join("")}</div>`;
     }
 
+    const candidateStatusLabels = {
+      pending: "尚未核验", needs_manual_review: "待人工复核", live: "仍在招聘",
+      expired: "已过期", blocked: "无法访问", irrelevant: "不相关"
+    };
+
+    function candidateQueueMessage(message, error = false) {
+      const status = $("candidateQueueStatus");
+      status.textContent = message;
+      status.classList.toggle("is-error", error);
+      status.hidden = !message;
+    }
+
+    function renderCandidateQueue() {
+      const {items, page, total} = candidateQueueState;
+      $("candidateQueueList").classList.add("candidate-queue-list");
+      $("candidateQueueList").innerHTML = items.length ? items.map(item => {
+        const url = safeExternalUrl(item.url);
+        const choices = Object.entries(candidateStatusLabels).filter(([value]) => value !== "pending")
+          .map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+        return `<article class="candidate-card" data-candidate-id="${item.candidate_id}">
+          <h3>${escapeHtml(item.title)}</h3>
+          <p class="candidate-card-meta">#${item.candidate_id} · ${escapeHtml(candidateStatusLabels[item.verification_status] || item.verification_status)} · ${item.source_count} 条来源记录</p>
+          ${item.snippet ? `<p>${escapeHtml(item.snippet)}</p>` : ""}
+          ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">打开来源链接核实</a>` : `<p>来源链接格式无效，请先核对来源。</p>`}
+          ${item.verification_detail ? `<p class="candidate-card-meta">上次核验：${escapeHtml(item.verification_detail)}</p>` : ""}
+          <div class="candidate-card-actions">
+            <select data-candidate-status aria-label="选择候选 #${item.candidate_id} 的核验结果"><option value="">选择核验结果</option>${choices}</select>
+            <input data-candidate-detail aria-label="候选 #${item.candidate_id} 的核验说明" maxlength="500" placeholder="核验说明（可选）">
+            <button type="button" data-candidate-save>保存核验结果</button>
+            <button type="button" data-candidate-import>录入正式岗位</button>
+          </div>
+        </article>`;
+      }).join("") : '<p class="empty-state">这个分类暂无候选。可切换上方分类查看其他链接。</p>';
+      $("candidateQueuePager").innerHTML = total > 20 ? `<span>${page * 20 + 1}–${Math.min(total, (page + 1) * 20)} / ${total}</span><div><button type="button" data-candidate-page="-1" ${page === 0 ? "disabled" : ""}>上一页</button><button type="button" data-candidate-page="1" ${(page + 1) * 20 >= total ? "disabled" : ""}>下一页</button></div>` : "";
+    }
+
+    async function loadCandidateQueue() {
+      candidateQueueMessage("正在读取候选链接…");
+      try {
+        const query = new URLSearchParams({status: $("candidateStatusFilter").value, page: String(candidateQueueState.page)});
+        const response = await fetch(`/api/candidates?${query}`, {
+          headers: {"X-Job-Agent-Token": actionToken}, cache: "no-store"
+        });
+        const result = await readApiResponse(response);
+        candidateQueueState.total = result.total;
+        if (candidateQueueState.page > 0 && !result.items.length && result.total) {
+          candidateQueueState.page = Math.ceil(result.total / 20) - 1;
+          return loadCandidateQueue();
+        }
+        candidateQueueState.items = result.items;
+        renderCandidateQueue();
+        candidateQueueMessage("");
+      } catch (error) {
+        candidateQueueMessage(`候选链接读取失败：${error?.message || error}`, true);
+      }
+    }
+
     function renderPreparation(rows) {
       elements.prepCount.textContent = `${rows.length} 项`;
       if (!rows.length) {
@@ -716,13 +876,16 @@ import {
     function showError(message) {
       elements.alert.textContent = message;
       elements.alert.classList.remove("success");
-      elements.alert.classList.add("visible");
-      elements.systemState.textContent = "数据读取失败";
+      elements.alert.classList.add("visible", "error");
+      elements.systemState.textContent = "请查看错误提示";
       elements.stateDot.className = "state-dot error";
     }
 
+    installGlobalFeedback(window, showError);
+
     function showSuccess(message) {
       elements.alert.textContent = message;
+      elements.alert.classList.remove("error");
       elements.alert.classList.add("visible", "success");
       elements.systemState.textContent = "本地数据已更新";
       elements.stateDot.className = "state-dot";
@@ -776,6 +939,33 @@ import {
       showSuccess("项目已通过真实性准入，可以作为经历库候选；系统仍不会自动把它写进简历。");
     }
 
+
+    // ── ① 准备投递（委托 prepare-controller 处理，支持动态 DOM 寻址与失败重试）────
+    const { startPrepare } = createPrepareController({
+      getActiveProfile: () => activeProfile,
+      activePreparingJobIds,
+      postLocalJson,
+      loadDashboard: (...args) => loadDashboard(...args),
+      showError,
+      showSuccess,
+      openProfile: () => elements.openProfileButton?.click(),
+      getSelectedJobId: () => currentView === "jobs" ? selectedJobId : null,
+      onPrepared: async (jobId) => {
+        if (typeof openReviewPanel === "function") await openReviewPanel(jobId);
+      },
+    });
+
+    // ── ② 审阅并打开招聘页（委托 review-dialog 模块处理，隔离会话与专用定位接口）────
+    const { openReviewPanel } = createReviewDialog({
+      $,
+      getJobs: () => currentJobs,
+      postLocalJson,
+      showError,
+      showSuccess,
+      loadDashboard: (...args) => loadDashboard(...args),
+    });
+
+    // ── Legacy helpers (retained for copilot fallback) ──────────────────
     async function createResumeDraft(jobId) {
       if (!activeProfile?.confirmed_fact_count) {
         showError("请先在个人资料中录入并确认真实经历，再生成岗位简历。照片可选。");
@@ -809,6 +999,11 @@ import {
     }
 
     async function approveResumeDraft(jobId) {
+      const detail = await readApiResponse(await fetchLocal(`/api/jobs/${encodeURIComponent(jobId)}/detail`));
+      if (detail?.resume_version?.fact_review_required) {
+        await openReviewPanel(jobId);
+        return false;
+      }
       const statement = `确认你已打开岗位 #${jobId} 的 PDF，并检查了事实、联系方式、版面与分页？确认后会批准草稿或重建人工投递材料包。`;
       if (!window.confirm(statement)) return false;
       try {
@@ -836,10 +1031,36 @@ import {
       }
     }
 
+
+    async function recordApplied(jobId) {
+      try {
+        await postLocalJson(`/api/applications/${encodeURIComponent(jobId)}/status`, { status: "applied", confirmed: true });
+        await loadDashboard();
+        showSuccess(`岗位 #${jobId} 已登记为已投递。后续可在"投递记录"标签中补录结果。`);
+      } catch (error) {
+        showError(`登记失败：${error?.message || error}`);
+      }
+    }
+
+    async function copyGreeting(jobId) {
+      const textEl = document.querySelector(".greeting-text");
+      const text = textEl ? textEl.textContent.trim() : "";
+      if (!text) { showError("招呼语内容为空，请先准备投递材料。"); return; }
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(text);
+          showSuccess("招呼语已复制到剪贴板。");
+        } catch {
+          showError("剪贴板写入失败，请手动选中招呼语文字复制。");
+        }
+      } else {
+        showError("当前环境不支持剪贴板 API，请手动复制。");
+      }
+    }
+
     let browserUseEpoch = 0;
     $("browserUseDialog").addEventListener("close", () => {
       browserUseEpoch++;
-      $("smsWebhookUrlDisplay").textContent = "打开弹窗后读取安全链接";
       for (const id of ["browserUseDryRunBtn", "browserUseRunBtn"]) {
         $(id).onclick = null;
         $(id).disabled = true;
@@ -858,11 +1079,10 @@ import {
       const logContent = $("browserUseLogContent");
       dryRunBtn.disabled = runBtn.disabled = true;
       dryRunBtn.onclick = runBtn.onclick = null;
-      $("smsWebhookUrlDisplay").textContent = "打开弹窗后读取安全链接";
 
       logSection.style.display = "none";
       logContent.textContent = "";
-      cdpStatusEl.innerHTML = '<span class="quiet">正在检测本地 Chrome 调试环境与大模型配置…</span>';
+      cdpStatusEl.textContent = "实站 AI 代填已暂停：第三方网页可能在输入或上传时自行提交。此预览不会打开网页或调用 AI。";
 
       const factFields = {Name: 'name', Degree: 'degree', School: 'school', Gpa: 'gpa', Phone: 'phone', Email: 'email', Experience: 'experience'};
       for (const key of Object.keys(factFields)) $("buFact" + key).textContent = "待完善";
@@ -870,7 +1090,6 @@ import {
 
       if (typeof dialog.showModal === "function") dialog.showModal();
       else dialog.setAttribute("open", "");
-      manualCode.open(jobId);
       try {
         const profileData = await readApiResponse(await fetch('/api/profile', {
           cache: 'no-store', headers: {'X-Job-Agent-Token': actionToken}
@@ -881,151 +1100,46 @@ import {
       } catch (error) { if (isCurrent()) $("buFactsStatus").textContent = `档案读取失败：${error.message}`; }
       if (!isCurrent()) return;
 
-      let cdpConnected = false;
-      let chromeInfo = null;
-
-      try {
-        const res = await fetch("/api/jobs/browser-use/status", { cache: "no-store" });
-        const data = await readApiResponse(res);
-        if (!isCurrent()) return;
-        cdpConnected = Boolean(data.cdp_connected);
-        chromeInfo = data.chrome_info || {};
-
-        if (cdpConnected) {
-          cdpStatusEl.innerHTML = `
-            <div style="color: #166534; font-weight: 600; display: flex; align-items: center; gap: 6px;">
-              <span>🟢 本机 Chrome CDP 调试端口 (9222) 已连接</span>
-            </div>
-            <div style="margin-top: 4px; color: #4b5563; font-size: 12px;">
-              已连接本地 Chrome。仅辅助填写；网站可能限制自动化，遇到验证或异常请停止并手工操作。
-            </div>
-          `;
-        } else {
-          const cmd = chromeInfo.command_powershell || '& "C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe" --remote-debugging-port=9222';
-          cdpStatusEl.innerHTML = `
-            <div style="color: #854d0e; font-weight: 600; display: flex; align-items: center; gap: 6px;">
-              <span>🟡 未检测到 Chrome 调试端口 (9222)</span>
-            </div>
-            <div style="margin-top: 4px; color: #4b5563; font-size: 12px; line-height: 1.5;">
-              推荐在 PowerShell 中执行以下命令启动 Chrome，并在窗口中登录求职网站：
-              <div style="background: #1e293b; color: #38bdf8; padding: 6px 10px; border-radius: 4px; margin: 6px 0; font-family: monospace; display: flex; justify-content: space-between; align-items: center;">
-                <span id="chromeCmdText" style="word-break: break-all;">${escapeHtml(cmd)}</span>
-                <button class="action-button secondary" type="button" style="padding: 2px 8px; font-size: 11px; margin-left: 8px;" id="btnCopyChromeCmd">复制</button>
-              </div>
-              （若未开启调试端口，Agent 将尝试启动独立控制的本地浏览器）
-            </div>
-          `;
-          const copyBtn = $("btnCopyChromeCmd");
-          if (copyBtn) {
-            copyBtn.onclick = () => {
-              navigator.clipboard.writeText(cmd).then(() => {
-                copyBtn.textContent = "已复制";
-                setTimeout(() => { copyBtn.textContent = "复制"; }, 2000);
-              });
-            };
-          }
-        }
-      } catch (err) {
-        if (!isCurrent()) return;
-        cdpStatusEl.innerHTML = `<span class="decision-warning">环境检测异常：${escapeHtml(err.message)}</span>`;
-      }
-
-      const updateSmsStatus = async () => {
-        try {
-          const smsRes = await fetch("/api/sms/setup", { cache: "no-store", headers: {"X-Job-Agent-Token": actionToken} });
-          const smsData = await readApiResponse(smsRes);
-          if (!isCurrent()) return;
-          if (smsData.webhook_url && $("smsWebhookUrlDisplay")) {
-            $("smsWebhookUrlDisplay").textContent = smsData.webhook_url;
-          }
-          if (smsData.latest_code && smsData.latest_code.code) {
-            $("smsCurrentBadge").textContent = "已收到";
-            $("smsCurrentBadge").style.background = "#dcfce7";
-            $("smsCurrentBadge").style.color = "#166534";
-            $("smsLatestDisplay").textContent = `本机有一条有效验证码（${smsData.latest_code.age_seconds || 0} 秒前收到），请本人核对来源与目标页面。`;
-          } else {
-            $("smsCurrentBadge").textContent = "未接收";
-            $("smsCurrentBadge").style.background = "#f1f5f9";
-            $("smsCurrentBadge").style.color = "#475569";
-            $("smsLatestDisplay").textContent = "暂无有效验证码。录入后仍需本人核对目标页面；接收不代表填写成功。";
-          }
-        } catch (_) { if (isCurrent()) $("smsLatestDisplay").textContent = "暂时无法读取短信设置，可使用手动录入。"; }
-      };
-
-      await updateSmsStatus();
-      if (!isCurrent()) return;
-
-      const btnCopySms = $("btnCopySmsWebhook");
-      if (btnCopySms) {
-        btnCopySms.onclick = () => {
-          const url = $("smsWebhookUrlDisplay").textContent;
-          navigator.clipboard.writeText(url).then(() => {
-            btnCopySms.textContent = "已复制";
-            setTimeout(() => { btnCopySms.textContent = "复制链接"; }, 2000);
-          });
-        };
-      }
-
       const execute = async (dryRun) => {
-        if (!isCurrent() || dryRunBtn.disabled || runBtn.disabled) return;
+        if (!dryRun || !isCurrent() || dryRunBtn.disabled) return;
         dryRunBtn.disabled = true;
         runBtn.disabled = true;
         logSection.style.display = "block";
-        logContent.textContent = dryRun ? "⏳ 正在生成模拟代填任务与字段对齐计划…" : "🚀 正在启动 browser-use 智能体，导航至岗位网申页面…\\n（不会主动点击最终提交；网页副作用仍需本人核对）\\n\\n";
+        logContent.textContent = "正在生成待填字段预览…";
 
         try {
           const postRes = await postLocalJson(`/api/jobs/${jobId}/browser-use`, {
-            dry_run: dryRun,
-            cdp_url: "http://localhost:9222"
+            dry_run: true
           });
           if (!isCurrent()) return;
           const r = postRes.result || {};
           let out = "";
-          if (dryRun) {
-            out += "=================== 【模拟代填预览】 ===================\\n";
-            out += `${r.summary}\\n\\n`;
-            out += `待填字段：${(r.filled_fields || []).join("、")}\\n`;
-            out += `计划执行动作：${(r.actions_taken || []).join(" -> ")}\\n`;
-            out += "========================================================\\n";
-          } else {
-            out += "=================== 【AI 代填执行结果】 ===================\\n";
-            out += `执行状态：${r.status === "stopped_for_review" ? "任务已停止，待本人核对实际填写结果" : r.status}\\n`;
-            out += `总结：\\n${r.summary}\\n\\n`;
-            if (r.filled_fields && r.filled_fields.length) {
-              out += `已识别并填写的字段：${r.filled_fields.join("、")}\\n`;
-            }
-            if (r.actions_taken && r.actions_taken.length) {
-              out += `执行操作序列：\\n${r.actions_taken.map((a, i) => `  ${i+1}. ${a}`).join("\\n")}\\n`;
-            }
-            if (r.error) {
-              out += `\\n⚠️ 异常或提示：${r.error}\\n`;
-            }
-            out += "\\n💡 提示：请在打开的浏览器页面中仔细核验各项信息，确认无误后手动点击最终提交！\\n";
-            out += "========================================================\\n";
-          }
+          out += `档案可供核对字段：${(r.filled_fields || []).join("、") || "无"}\n`;
+          out += `预览说明：${r.summary || "未生成说明"}\n`;
+          out += "请在招聘网站核对并手工填写；这里没有修改网页。";
           logContent.textContent = out;
-          showSuccess(dryRun ? "模拟计划已生成，未填写网页。" : `辅助任务已返回（${r.status || '状态未知'}），请到招聘页面核对实际结果。`);
+          showSuccess("字段预览已生成，未打开招聘网页。");
         } catch (err) {
           if (!isCurrent()) return;
           logContent.textContent += `\\n❌ 执行失败：${err.message || err}`;
-          showError(`代填任务异常：${err.message || err}`);
+          showError(`字段预览失败：${err.message || err}`);
         } finally {
           if (isCurrent()) {
             dryRunBtn.disabled = false;
-            runBtn.disabled = false;
+            runBtn.disabled = true;
           }
         }
       };
 
       dryRunBtn.onclick = () => execute(true);
-      runBtn.onclick = () => execute(false);
-      dryRunBtn.disabled = runBtn.disabled = false;
+      runBtn.onclick = null;
+      dryRunBtn.disabled = false;
+      runBtn.disabled = true;
     }
 
     let resumeEditorState = null;
     const resumeTailor = createResumeTailor({getState: () => resumeEditorState, sync: syncEditorContent, token: () => actionToken});
     const mockInterview = createMockInterview({token: () => actionToken});
-    const manualCode = createManualCode({token: () => actionToken});
     const tracking = createTracking({token: () => actionToken, openJob: focusJob, changed: () => loadDashboard()});
     $("trackingHub").hidden = true;
 
@@ -1291,7 +1405,7 @@ import {
       }
       else if (kind === "open_profile") elements.openProfileButton.click();
       else if (kind === "open_settings") elements.openSettingsButton.click();
-      else if (kind === "create_resume_draft") await createResumeDraft(jobId);
+      else if (kind === "create_resume_draft" || kind === "prepare" || kind === "prepare_job") await startPrepare(jobId);
       else if (kind === "revise_resume") {
         const cleaned = String(instruction || "").trim();
         if (!cleaned) throw new Error("这条 Agent 动作缺少修改要求，请重新发送消息。");
@@ -1315,8 +1429,7 @@ import {
           showError(`Agent 修改简历失败：${error?.message || error}`);
         }
       }
-      else if (kind === "approve_resume_draft") await approveResumeDraft(jobId);
-      else if (kind === "start_safe_fill") await startManualApply(jobId);
+      else if (kind === "approve_resume_draft" || kind === "review_and_open" || kind === "start_safe_fill") await openReviewPanel(jobId);
     }
 
     async function recordStatus(jobId, status, detail) {
@@ -1375,14 +1488,23 @@ import {
 
     const loadDashboard = coalesceRefresh(refreshDashboard);
 
-    async function refreshDashboard() {
+    async function refreshDashboard({ preserveAlert = false } = {}) {
       setLoading(true);
-      elements.alert.classList.remove("visible");
+      if (!preserveAlert && !elements.alert.classList.contains("error")) {
+        elements.alert.classList.remove("visible");
+      }
       try {
         const response = await fetch("/api/dashboard", { cache: "no-store" });
         const data = await readApiResponse(response);
 
-        actionToken = data.action_token || "";
+        const receivedActionToken = data.action_token || "";
+        if (actionToken && receivedActionToken && actionToken !== receivedActionToken) {
+          // Another tab replaced the person. Discard forms and unsaved values
+          // from this page before it can bind to the next person's token.
+          window.location.reload();
+          return;
+        }
+        actionToken = receivedActionToken;
         try {
           // Background refresh must not erase unsaved API settings.
           if (!elements.settingsDialog.open) await loadConnectorSettings();
@@ -1396,6 +1518,12 @@ import {
         renderMetrics(data.metrics || []);
         renderFunnel(data.funnel || []);
         renderTrackedJobs(data.tracked_jobs || []);
+        if (currentView === "jobs" && history.state?.jobId != null
+            && !data.tracked_jobs?.some(job => String(job.job_id) === String(history.state.jobId))) {
+          history.replaceState({...history.state, jobId: null}, "", "#jobs");
+          $("jobWorkspace").classList.remove("detail-visible");
+          showError("原来的岗位已移除，请从职位列表重新选择。");
+        }
         renderJobs(data.tracked_jobs || []);
         const selected = currentJobs.find(job => job.job_id === selectedJobId);
         if (selected) {
@@ -1419,7 +1547,7 @@ import {
         showError(`暂时无法读取求职数据。请保留启动窗口并重试。${error?.message ? `（${error.message}）` : ""}`);
       } finally {
         setLoading(false);
-        if (!elements.alert.classList.contains("visible")) {
+        if (!elements.alert.classList.contains("visible") || elements.alert.classList.contains("success")) {
           elements.systemState.textContent = "本地数据已连接";
           elements.stateDot.className = "state-dot";
         }
@@ -1440,6 +1568,7 @@ import {
       if (action === "refresh") loadDashboard();
       else if (action === "profile") elements.openProfileButton.click();
       else if (action === "preferences") elements.openPreferencesButton.click();
+      else if (action === "import") elements.openImportJobButton.click();
       else if (action === "settings") elements.openSettingsButton.click();
       else if (action) navigate(action);
     });
@@ -1449,32 +1578,99 @@ import {
     });
     $("workspaceNav").addEventListener("click", () => showWorkspace());
     $("overviewNav").addEventListener("click", () => showWorkspace(true));
-    $("jobSearch").addEventListener("input", () => renderJobs(currentJobs));
+    $("jobSearch").addEventListener("input", () => {
+      clearTimeout(jobSearchTimer);
+      jobSearchTimer = setTimeout(() => renderJobs(currentJobs, {resetPage: true}), 150);
+    });
     document.querySelector(".track-switch").addEventListener("click", event => {
       const button = event.target.closest("[data-job-track]");
       if (!button) return;
       jobTrack = button.dataset.jobTrack;
-      renderJobs(currentJobs);
+      renderJobs(currentJobs, {resetPage: true});
     });
     document.querySelector(".track-plan").addEventListener("click", event => {
       const button = event.target.closest("[data-job-track]");
       if (!button) return;
       jobTrack = button.dataset.jobTrack;
-      renderJobs(currentJobs);
+      renderJobs(currentJobs, {resetPage: true});
     });
     document.querySelector(".job-filters").addEventListener("click", event => {
       const button = event.target.closest("[data-job-filter]");
       if (!button) return;
       jobFilter = button.dataset.jobFilter;
-      renderJobs(currentJobs);
+      renderJobs(currentJobs, {resetPage: true});
+    });
+    $("candidateQueue").addEventListener("toggle", () => {
+      if ($("candidateQueue").open) loadCandidateQueue();
+    });
+    $("candidateStatusFilter").addEventListener("change", () => {
+      candidateQueueState.page = 0;
+      loadCandidateQueue();
+    });
+    $("candidateQueuePager").addEventListener("click", event => {
+      const button = event.target.closest("[data-candidate-page]");
+      if (!button || button.disabled) return;
+      candidateQueueState.page += Number(button.dataset.candidatePage);
+      loadCandidateQueue();
+    });
+    $("candidateQueueList").addEventListener("click", async event => {
+      const card = event.target.closest("[data-candidate-id]");
+      if (!card) return;
+      const candidate = candidateQueueState.items.find(item => String(item.candidate_id) === card.dataset.candidateId);
+      if (!candidate) return;
+      if (event.target.closest("[data-candidate-import]")) {
+        elements.openImportJobButton.click();
+        elements.parsedTitle.value = candidate.title;
+        elements.parsedSourceUrl.value = safeExternalUrl(candidate.url) || "";
+        const status = $("importJobStatus");
+        status.textContent = "这是搜索线索，请从原招聘页核对并补齐公司、完整岗位说明，再保存为正式岗位。";
+        status.hidden = false;
+        elements.parsedCompany.focus();
+        return;
+      }
+      const button = event.target.closest("[data-candidate-save]");
+      if (!button) return;
+      const status = card.querySelector("[data-candidate-status]").value;
+      if (!status) {
+        candidateQueueMessage("请先选择你已经核实的结果。", true);
+        card.querySelector("[data-candidate-status]").focus();
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/candidates/${candidate.candidate_id}/verify`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", "X-Job-Agent-Token": actionToken},
+          body: JSON.stringify({status, detail: card.querySelector("[data-candidate-detail]").value.trim(), confirmed: true})
+        });
+        await readApiResponse(response);
+        await loadCandidateQueue();
+        try {
+          await loadDashboard();
+          candidateQueueMessage(`候选 #${candidate.candidate_id} 的核验结果已保存。`);
+        } catch {
+          candidateQueueMessage(`候选 #${candidate.candidate_id} 已保存，但概览刷新失败。请刷新页面查看。`, true);
+        }
+      } catch (error) {
+        candidateQueueMessage(`核验结果未保存：${error?.message || error}`, true);
+        button.disabled = false;
+      }
     });
     elements.jobs.addEventListener("click", event => {
+      const pageButton = event.target.closest("[data-jobs-page]");
+      if (pageButton && !pageButton.disabled) {
+        jobPage += Number(pageButton.dataset.jobsPage);
+        renderJobs(currentJobs);
+        elements.jobs.scrollTop = 0;
+        return;
+      }
       const choice = event.target.closest("[data-select-job]");
       if (choice) selectJob(choice.dataset.selectJob);
       if (event.target.closest("[data-clear-search]")) {
         $("jobSearch").value = "";
         jobFilter = "all";
-        renderJobs(currentJobs);
+        clearTimeout(jobSearchTimer);
+        renderJobs(currentJobs, {resetPage: true});
         $("jobSearch").focus();
       }
     });
@@ -1496,6 +1692,7 @@ import {
       if (action === "status" || action === "commute") {
         showWorkspace(true);
         elements.statusJob.value = String(jobId);
+        elements.statusValue.value = "";
         elements.commuteJob.value = String(jobId);
         elements.routeJob.value = String(jobId);
         elements.statusConfirmed.checked = false;
@@ -1563,8 +1760,7 @@ import {
         else dialog.setAttribute("open", "");
         $("closeInterviewPrepButton").onclick = () => dialog.close();
         try {
-          const res = await fetch(`/api/jobs/${jobId}/interview-prep`, { cache: "no-store" });
-          const data = await readApiResponse(res);
+          const data = await postLocalJson(`/api/jobs/${encodeURIComponent(jobId)}/interview-prep`, {});
           const prep = data.data || {};
           const questions = prep.questions || [];
           if (!questions.length) throw new Error("未能获取面试真题");
@@ -1621,6 +1817,10 @@ import {
           await postLocalJson(`/api/jobs/${jobId}/open-page`, {});
           showSuccess("已请求系统浏览器打开招聘页。登录与提交由你完成，不会自动标记为已投递。");
         }
+        // 新两步流程
+        if (action === "prepare") { button.disabled = false; await startPrepare(jobId); return; }
+        if (action === "review-and-open") { button.disabled = false; await openReviewPanel(jobId); return; }
+        // 保留旧入口（edit-resume、project workshop 等）
         if (action === "create-resume") await createResumeDraft(jobId);
         if (action === "approve-resume") await approveResumeDraft(jobId);
         if (action === "manual-apply") await startManualApply(jobId);
@@ -1828,7 +2028,13 @@ import {
         await recordStatus(jobId, status, elements.statusDetail.value.trim());
         elements.statusDetail.value = "";
         elements.statusConfirmed.checked = false;
-        await loadDashboard();
+        elements.statusValue.value = "";
+        try {
+          await loadDashboard();
+        } catch {
+          showError(`岗位 #${jobId} 的状态已记录，但页面刷新失败。请刷新页面查看，不要重复提交。`);
+          return;
+        }
         showSuccess(`岗位 #${jobId} 已更新为“${statusLabels[status] || status}”。`);
       } catch (error) {
         showError(`状态记录失败：${error?.message || error}`);
@@ -2035,7 +2241,7 @@ import {
         testConnBtn.disabled = true;
         testConnRes.hidden = false;
         testConnRes.style.color = "#475569";
-        testConnRes.textContent = "正在向服务商发送握手测试，请稍候…";
+        testConnRes.textContent = "正在向服务商发送一次测试请求；成功后计入本机用量，请稍候…";
         try {
           const response = await fetch("/api/settings/test-connection", {
             method: "POST",
@@ -2048,6 +2254,7 @@ import {
               model: aiProvider === "local" ? "local-explainable-v1" : elements.aiModel.value.trim(),
               base_url: aiProvider === "openai_compatible" ? elements.aiBaseUrl.value.trim() : null,
               api_key: elements.aiApiKey.value.trim(),
+              monthly_quota: elements.aiMonthlyQuota.value.trim(),
             }),
           });
           const data = await readApiResponse(response);
@@ -2067,10 +2274,39 @@ import {
       });
     }
 
-    elements.openProfileButton.addEventListener("click", () => {
+    let profilePrivateFieldsLoaded = false;
+    let profileEditPrivateFields = null;
+    elements.openProfileButton.addEventListener("click", async () => {
       prefillProfileForm(activeProfile);
+      profilePrivateFieldsLoaded = !activeProfile;
+      profileEditPrivateFields = null;
       if (typeof elements.profileDialog.showModal === "function") elements.profileDialog.showModal();
       else elements.profileDialog.setAttribute("open", "");
+      if (!activeProfile) return;
+      elements.profileSubmit.disabled = true;
+      const status = $("profileFormStatus");
+      status.textContent = "正在读取已保存的联系方式和其他偏好…";
+      status.hidden = false;
+      try {
+        const response = await fetch("/api/profile/edit", {
+          headers: {"X-Job-Agent-Token": actionToken},
+          cache: "no-store"
+        });
+        const fields = await readApiResponse(response);
+        if (!elements.profileDialog.open) return;
+        profileEditPrivateFields = fields;
+        if (elements.profileMode.value === "replace") return;
+        $("profileEmail").value = fields.email || "";
+        $("profilePhone").value = fields.phone || "";
+        $("profileNotes").value = fields.notes || "";
+        profilePrivateFieldsLoaded = true;
+        status.hidden = true;
+      } catch {
+        status.textContent = "已保存的联系方式暂时无法读取。留空会保留旧值；如需清空，请刷新页面后重试。";
+        status.hidden = false;
+      } finally {
+        elements.profileSubmit.disabled = false;
+      }
     });
 
     elements.openPreferencesButton.addEventListener("click", () => {
@@ -2113,7 +2349,12 @@ import {
         });
         await readApiResponse(response);
         closePreferencesDialog();
-        await loadDashboard();
+        try {
+          await loadDashboard();
+        } catch {
+          showError("求职偏好已保存，但页面刷新失败。请刷新页面查看，不要重复提交。");
+          return;
+        }
         showSuccess("求职方向与通勤边界已更新，岗位列表已按新的条件重新排序。");
       } catch (error) {
         showError(`求职偏好保存失败：${error?.message || error}`);
@@ -2126,6 +2367,19 @@ import {
     elements.cancelProfileButton.addEventListener("click", closeProfileDialog);
     elements.profileMode.addEventListener("change", () => {
       const replacing = elements.profileMode.value === "replace";
+      if (replacing) {
+        elements.profileForm.reset();
+        elements.profileMode.value = "replace";
+        profilePrivateFieldsLoaded = true;
+      } else {
+        prefillProfileForm(activeProfile);
+        if (profileEditPrivateFields) {
+          $("profileEmail").value = profileEditPrivateFields.email || "";
+          $("profilePhone").value = profileEditPrivateFields.phone || "";
+          $("profileNotes").value = profileEditPrivateFields.notes || "";
+        }
+        profilePrivateFieldsLoaded = Boolean(profileEditPrivateFields) || !activeProfile;
+      }
       elements.replaceConfirm.classList.toggle("visible", replacing);
       const checkbox = elements.replaceConfirm.querySelector('input[name="confirm_replace"]');
       checkbox.required = replacing;
@@ -2165,18 +2419,34 @@ import {
     });
     elements.profileForm.addEventListener("submit", async (event) => {
       event.preventDefault();
+      $("profileFormStatus").hidden = true;
       syncProfileRequirements(activeProfile);
       if (!elements.profileForm.reportValidity()) return;
       elements.profileSubmit.disabled = true;
+      const firstProfile = !activeProfile;
       try {
+        const formData = new FormData(elements.profileForm);
+        formData.set("sync_visible_fields", "true");
+        if (profilePrivateFieldsLoaded) formData.set("sync_private_fields", "true");
         const response = await fetch("/api/profile/onboard", {
           method: "POST",
           headers: { "X-Job-Agent-Token": actionToken },
-          body: new FormData(elements.profileForm)
+          body: formData
         });
         const result = await readApiResponse(response);
+        if (result.replaced_profile && result.action_token) {
+          // The switching page is the one page allowed to continue with the
+          // new person without a full reload. Other tabs keep old tokens.
+          actionToken = result.action_token;
+        }
         closeProfileDialog();
-        await loadDashboard();
+        if (firstProfile) navigate("today");
+        try {
+          await loadDashboard();
+        } catch {
+          showError("资料已保存，但页面刷新失败。请刷新页面查看，不要重复导入简历。");
+          return;
+        }
         const switchNote = result.replaced_profile ? "已备份上一位用户并切换到新的空白岗位库。" : "已更新当前用户资料。";
         const warning = (result.warnings || []).length ? ` 提醒：${result.warnings.join("；")}` : "";
         const resumeNote = result.resume_filename
@@ -2184,11 +2454,19 @@ import {
           : "未重复上传简历，原有经历库保持不变。";
         showSuccess(`${switchNote} ${resumeNote}${warning}`);
       } catch (error) {
-        showError(`简历与资料保存失败：${error?.message || error}`);
+        const status = $("profileFormStatus");
+        status.textContent = `资料尚未保存：${error?.message || error}`;
+        status.hidden = false;
+        status.focus();
       } finally {
         elements.profileSubmit.disabled = false;
       }
     });
+
+    elements.profileForm.addEventListener("invalid", event => {
+      const section = event.target.closest("details");
+      if (section) section.open = true;
+    }, true);
 
     elements.queueButton.addEventListener("click", () => {
       showWorkspace();
@@ -2215,21 +2493,29 @@ import {
         elements.parsedLocation.value = "";
         elements.parsedSourceUrl.value = "";
         elements.parsedJdText.value = "";
+        $("importJobStatus").hidden = true;
         if (typeof elements.importJobDialog.showModal === "function") elements.importJobDialog.showModal();
         else elements.importJobDialog.setAttribute("open", "");
       });
       const closeImportDialog = () => elements.importJobDialog.close();
+      const importStatus = (message, error = false) => {
+        const status = $("importJobStatus");
+        status.textContent = message;
+        status.classList.toggle("is-error", error);
+        status.hidden = false;
+        status.focus();
+      };
       elements.closeImportJobButton.addEventListener("click", closeImportDialog);
       elements.cancelImportJobButton.addEventListener("click", closeImportDialog);
 
       elements.btnAiExtract.addEventListener("click", async () => {
         const rawText = elements.rawJobInput.value.trim();
         if (!rawText) {
-          showError("请先粘贴一段招聘信息文本");
+          importStatus("请先粘贴招聘信息或岗位链接；也可以直接填写下方字段。", true);
           return;
         }
         elements.btnAiExtract.disabled = true;
-        elements.btnAiExtract.textContent = "⏳ 正在智能解析…";
+        elements.btnAiExtract.textContent = "正在识别…";
         try {
           const res = await fetch("/api/jobs/extract-jd", {
             method: "POST",
@@ -2240,22 +2526,36 @@ import {
             body: JSON.stringify({ raw_text: rawText }),
           });
           const data = await readApiResponse(res);
+          if (data.ok === false) {
+            importStatus(`${data.warning || "无法读取这条岗位信息。"}你可以粘贴岗位文字，或直接填写下方字段。`, true);
+            return;
+          }
           const parsed = data.parsed || {};
-          elements.parsedCompany.value = parsed.company || "";
-          elements.parsedTitle.value = parsed.title || "";
+          const missingCompany = !parsed.company || parsed.company === "未知公司";
+          const missingTitle = !parsed.title || parsed.title === "未命名岗位";
+          elements.parsedCompany.value = missingCompany ? "" : parsed.company;
+          elements.parsedTitle.value = missingTitle ? "" : parsed.title;
           elements.parsedLocation.value = parsed.location || "";
-          elements.parsedJdText.value = parsed.jd_text || rawText;
-          showSuccess("✨ 提取成功，请核对后点击下方保存入库");
+          elements.parsedSourceUrl.value = parsed.source_url || elements.parsedSourceUrl.value;
+          elements.parsedJdText.value = parsed.jd_text || (rawText.startsWith("http") ? "" : rawText);
+          if (missingCompany || missingTitle) {
+            importStatus("已整理岗位说明，但公司或岗位名称未识别出来。请手动补齐并核对后保存。", true);
+            (missingCompany ? elements.parsedCompany : elements.parsedTitle).focus();
+          } else importStatus("已填入识别结果。请核对公司、岗位要求和原职位链接后保存。");
         } catch (err) {
-          showError(`解析失败: ${err.message}`);
+          importStatus(`识别失败：${err.message}。请直接填写下方字段。`, true);
         } finally {
           elements.btnAiExtract.disabled = false;
-          elements.btnAiExtract.textContent = "✨ AI 智能拆解并填入下表";
+          elements.btnAiExtract.textContent = "识别岗位信息";
         }
       });
 
       elements.importJobParsedForm.addEventListener("submit", async (e) => {
         e.preventDefault();
+        if (["未知公司", "未命名岗位"].includes(elements.parsedCompany.value.trim()) || ["未知公司", "未命名岗位"].includes(elements.parsedTitle.value.trim())) {
+          importStatus("请填写真实公司和岗位名称，不要保存识别用的占位文字。", true);
+          return;
+        }
         elements.submitImportJob.disabled = true;
         elements.submitImportJob.textContent = "正在保存…";
         try {
@@ -2276,14 +2576,19 @@ import {
           });
           const data = await readApiResponse(res);
           closeImportDialog();
-          showSuccess(`🎉 岗位录入成功 (编号 #${data.job_id}，匹配分: ${data.match_score || "已计算"})`);
-          await loadDashboard();
-          navigate("jobs", data.job_id);
+          try {
+            await loadDashboard();
+            navigate("jobs", data.job_id);
+          } catch {
+            showError(`岗位 #${data.job_id} 已保存，但页面刷新失败。请刷新页面查看，不要重复录入。`);
+            return;
+          }
+          showSuccess(`岗位已保存。${data.match_score != null ? `本地匹配参考 ${data.match_score} 分；` : "匹配结果尚未生成；"}下一步请核对岗位并准备材料。`);
         } catch (err) {
-          showError(`录入失败: ${err.message}`);
+          importStatus(`岗位尚未保存：${err.message}。请核对必填项后重试。`, true);
         } finally {
           elements.submitImportJob.disabled = false;
-          elements.submitImportJob.textContent = "💾 确认并录入岗位库";
+          elements.submitImportJob.textContent = "保存岗位";
         }
       });
     }
@@ -2296,13 +2601,16 @@ import {
     compactWorkspace.addEventListener("change", syncAgentExpanded);
     syncAgentExpanded();
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") loadDashboard();
+      if (document.visibilityState === "visible") loadDashboard({ preserveAlert: true });
     });
-    window.setInterval(loadDashboard, 60000);
+    window.setInterval(() => loadDashboard({ preserveAlert: true }), 60000);
     const stats = document.createElement("details");
     stats.className = "progress-statistics";
     stats.innerHTML = '<summary>统计与数据说明</summary>';
     $("overviewPanel").append(stats);
+    $("overviewPanel").querySelector(".layout-grid").insertBefore(
+      document.querySelector(".area-candidate"), document.querySelector(".insight-grid")
+    );
     stats.append(elements.metrics, document.querySelector(".insight-grid"), document.querySelector(".methodology-shell"));
     const profileConnections = document.createElement("section");
     profileConnections.className = "profile-connections";
@@ -2320,6 +2628,7 @@ import {
       return loadCopilot();
     }).catch(error => {
       elements.copilotProvider.textContent = "对话暂不可用，请重新打开 Agent";
+      showError(`页面部分功能暂不可用。请刷新后重试。${error?.message ? `（${error.message}）` : ""}`);
     });
 
     function setupGeminiMobileUI() {
@@ -2346,13 +2655,17 @@ import {
       const drawerNewChatBtn = document.getElementById("drawerNewChatBtn");
       const drawerUserProfileBtn = document.getElementById("drawerUserProfileBtn");
       const drawerSettingsBtn = document.getElementById("drawerSettingsBtn");
+      let drawerReturnFocus = null;
 
       function openDrawer() {
         if (drawer) {
+          drawerReturnFocus = document.activeElement;
           drawer.classList.add("open");
           drawer.setAttribute("aria-hidden", "false");
+          openDrawerBtn?.setAttribute("aria-expanded", "true");
           renderDrawerRecents();
           updateProfileDisplayInUI();
+          closeDrawerBtn?.focus();
         }
       }
 
@@ -2360,12 +2673,30 @@ import {
         if (drawer) {
           drawer.classList.remove("open");
           drawer.setAttribute("aria-hidden", "true");
+          openDrawerBtn?.setAttribute("aria-expanded", "false");
+          if (drawerReturnFocus?.isConnected) drawerReturnFocus.focus();
         }
       }
 
       if (openDrawerBtn) openDrawerBtn.addEventListener("click", openDrawer);
       if (closeDrawerBtn) closeDrawerBtn.addEventListener("click", closeDrawer);
       if (drawerBackdrop) drawerBackdrop.addEventListener("click", closeDrawer);
+      drawer?.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeDrawer();
+          return;
+        }
+        if (event.key !== "Tab") return;
+        const focusable = [...drawer.querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex="0"]')]
+          .filter(el => !el.disabled && el.getClientRects().length);
+        const first = focusable[0], last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first?.focus();
+        }
+      });
       if (drawerSettingsBtn) {
         drawerSettingsBtn.addEventListener("click", () => {
           closeDrawer();
@@ -2387,7 +2718,24 @@ import {
           else if (target === "workspace") navigate("jobs");
           else if (target === "tracking") navigate("progress");
           else if (target === "interview") openInterviewPreparation();
-          else if (target === "extension") elements.openImportJobButton?.click();
+          else if (target === "help") {
+            navigate("today");
+            requestAnimationFrame(() => {
+              const guide = $("startGuide");
+              if (guide) {
+                guide.open = true;
+                guide.scrollIntoView({block: "start"});
+                guide.querySelector("summary")?.focus();
+              } else {
+                const setupGuide = document.querySelector(".setup-guide");
+                if (setupGuide) {
+                  setupGuide.setAttribute("tabindex", "-1");
+                  setupGuide.scrollIntoView({block: "start"});
+                  setupGuide.focus();
+                }
+              }
+            });
+          }
           else if (target === "import") elements.openImportJobButton?.click();
         });
       });

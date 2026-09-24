@@ -9,6 +9,7 @@ from unittest import mock
 
 from job_agent.services.dashboard import create_dashboard_server
 from job_agent.services.job_repository import JobRepository
+from job_agent.models.job_record import JobRecordInput
 
 
 class DashboardHardeningTests(unittest.TestCase):
@@ -134,9 +135,13 @@ class DashboardHardeningTests(unittest.TestCase):
 
     def test_missing_artifact_after_lookup_is_not_reported_as_success(self):
         from job_agent.services.dashboard_routes import jobs_api
+        job = self.repository.upsert_job(JobRecordInput(
+            company="合成公司", title="合成岗位", jd_text="合成岗位说明",
+            source="合成", source_url="https://example.org/jobs/synthetic", location="上海",
+        ))
         with mock.patch.object(jobs_api, "_latest_preparation_path", return_value=self.root / "missing.md"):
             with self.assertLogs("job_agent.services.dashboard", level="ERROR"):
-                status, body, _ = self.request("/preparation/1")
+                status, body, _ = self.request(f"/preparation/{job.job_id}")
         self.assertEqual(status, 500)
         self.assertIn("error", json.loads(body))
 

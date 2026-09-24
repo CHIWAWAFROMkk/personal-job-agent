@@ -52,5 +52,8 @@ desktop.ini
 output/
 evals/*.json
 scripts/launch_chrome_debug.bat
+scripts/capture_gemini_ui.py
+scripts/product_trial.py
 debug_chrome.log
+求职Agent问题总结.md
 

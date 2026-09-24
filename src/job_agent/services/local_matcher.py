@@ -181,11 +181,22 @@ def _split_requirement_clauses(line: str) -> list[str]:
 
 
 def _extract_labeled_value(lines: list[str], labels: tuple[str, ...]) -> str | None:
+    # Copied messages often put several labeled fields on one line. Stop at
+    # the next field label rather than treating the whole message as a name.
+    all_labels = METADATA_LABELS | set(SECTION_HEADINGS) | {
+        "Company", "Role", "Title", "Location", "Salary", "岗位名称",
+    }
+    next_label = "|".join(re.escape(label) for label in sorted(all_labels, key=len, reverse=True))
+    boundary = r"(?:^|[；;。|｜]\s*|\s+)"
     for line in lines:
         for label in labels:
-            match = re.match(rf"^\s*{re.escape(label)}\s*[:：]\s*(.+)$", line, re.I)
+            match = re.search(
+                rf"{boundary}{re.escape(label)}\s*[:：]\s*(.+?)"
+                rf"(?=(?:[；;。|｜]\s*|\s+)(?:{next_label})\s*[:：]|$)",
+                line, re.I,
+            )
             if match:
-                return match.group(1).strip()
+                return match.group(1).strip(" ;；。|｜") or None
     return None
 
 
@@ -218,7 +229,7 @@ def structure_job_locally(
     raw_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
     clean_lines = [_clean_line(line) for line in raw_lines]
     company = company or _extract_labeled_value(raw_lines, ("公司", "公司名称", "Company"))
-    title = title or _extract_labeled_value(raw_lines, ("岗位", "职位", "职位名称", "Role", "Title"))
+    title = title or _extract_labeled_value(raw_lines, ("岗位", "职位", "职位名称", "岗位名称", "Role", "Title"))
     location = location or _extract_labeled_value(raw_lines, ("地点", "工作地点", "城市", "Location"))
 
     responsibilities: list[str] = []

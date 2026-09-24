@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import re
 import unicodedata
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, NoReturn
 
 from job_agent.models.profile import (
     Availability,
@@ -19,8 +22,15 @@ from job_agent.models.profile import (
     SourceDocument,
     empty_profile,
 )
-from job_agent.services.profile_store import load_profile, save_profile
+from job_agent.services.job_repository import JobDatabaseError
+from job_agent.services.profile_store import load_profile, save_profile, write_bytes_atomic, write_json_atomic
+from job_agent.services.profile_recovery import (
+    PENDING_NAME, finish_record, restore_files,
+)
 from job_agent.services.resume_reader import read_resume
+
+if TYPE_CHECKING:
+    from job_agent.services.job_repository import JobRepository
 
 
 class ProfileOnboardingError(RuntimeError):
@@ -55,6 +65,8 @@ class ProfileOnboardingInput:
     major: str = ""
     graduation: str | None = None
     notes: str = ""
+    sync_visible_fields: bool = False
+    sync_private_fields: bool = False
     confirm_truth: bool = False
     confirm_replace: bool = False
 
@@ -145,6 +157,7 @@ def _contains_contact(line: str) -> bool:
 def _fact_lines(text: str, *, display_name: str) -> list[str]:
     facts: list[str] = []
     seen: set[str] = set()
+    display_name = unicodedata.normalize("NFKC", display_name)
     for raw_line in text.splitlines():
         line = unicodedata.normalize("NFKC", raw_line).strip()
         line = re.sub(r"^[\s•·●▪◦*\-—–]+", "", line).strip()
@@ -155,6 +168,8 @@ def _fact_lines(text: str, *, display_name: str) -> list[str]:
         if compact in _HEADINGS or compact.rstrip(":：") in _HEADINGS:
             continue
         if display_name and compact == display_name.replace(" ", ""):
+            continue
+        if display_name and re.fullmatch(re.escape(display_name) + r"\s*\([^()\n]{1,30}\)", line):
             continue
         if _contains_contact(line):
             continue
@@ -168,6 +183,37 @@ def _fact_lines(text: str, *, display_name: str) -> list[str]:
         if len(facts) >= 80:
             break
     return facts
+
+
+def _resume_contacts(text: str) -> tuple[str, str]:
+    """Use a unique contact in the resume header, never choose among people.
+
+    Global uniqueness also rejects a header contact when another person's
+    contact occurs later. Unrecognized formats remain for explicit user input.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    email_pattern = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}(?![\w.-])")
+    phone_pattern = re.compile(r"(?<!\d)(?:\+?86[ -]*)?(1[3-9](?:[ -]*\d){9})(?!\d)")
+    emails = {match.group().casefold(): match.group() for match in email_pattern.finditer(text)}
+    phones = {re.sub(r"\D", "", match.group(1)) for match in phone_pattern.finditer(text)}
+    header: list[str] = []
+    for line in (line.strip() for line in text.splitlines() if line.strip()):
+        label = line.replace(" ", "").rstrip(":：")
+        if label in {"个人简历", "简历", "联系方式"}:
+            continue
+        section_label = re.split(r"[:：]", label, maxsplit=1)[0]
+        if label in _HEADINGS or section_label in _HEADINGS or len(header) >= 12:
+            break
+        header.append(line)
+    third_party = re.compile(r"推荐人|证明人|导师|老师|招聘|客服|紧急联系|\b(?:hr|referee|reference|recruiter|mentor)\b",re.I)
+    if any(third_party.search(line) for line in header):
+        return "", ""
+    own_lines = [line for line in header if len(line) <= 180]
+    header_emails = {match.group().casefold() for line in own_lines for match in email_pattern.finditer(line)}
+    header_phones = {re.sub(r"\D", "", match.group(1)) for line in own_lines for match in phone_pattern.finditer(line)}
+    email = next(iter(emails.values())) if len(emails) == 1 and set(emails).issubset(header_emails) else ""
+    phone = next(iter(phones)) if len(phones) == 1 and phones.issubset(header_phones) else ""
+    return email, phone
 
 
 def _matched_skill_ids(text: str) -> dict[str, tuple[str, str, tuple[str, ...]]]:
@@ -240,7 +286,8 @@ def onboard_profile(
     if phone and len(re.sub(r"\D", "", phone)) < 7:
         raise ProfileOnboardingError("手机号或联系电话格式不正确。")
 
-    if request.mode == "replace" or not profile_path.is_file():
+    new_profile = request.mode == "replace" or not profile_path.is_file()
+    if new_profile:
         profile = empty_profile()
     else:
         profile = load_profile(profile_path)
@@ -249,6 +296,7 @@ def onboard_profile(
     document = None
     source_id = ""
     already_imported = True
+    contact_warnings: list[str] = []
     if has_uploaded_resume:
         resume_path = _write_uploaded_resume(
             private_dir,
@@ -256,6 +304,10 @@ def onboard_profile(
             request.resume_bytes,
         )
         document = read_resume(resume_path)
+        if not _fact_lines(document.text, display_name=display_name):
+            raise ProfileOnboardingError(
+                "这份简历未能识别出可用经历。请换一份可复制文字的简历，或使用 TXT 文本，每条经历写成完整的一行后重试。资料尚未保存。"
+            )
         source_id = f"resume-{document.sha256[:12]}"
         extracted_path = private_dir / f"{source_id}.txt"
         extracted_path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,15 +325,33 @@ def onboard_profile(
             source.id == source_id for source in profile.source_documents
         )
 
-    if display_name:
+        # A collapsed optional form is not an instruction to discard contacts
+        # already present in the uploaded resume. Explicit edits (including
+        # clearing private fields) and existing confirmed values take priority.
+        if new_profile or not request.sync_private_fields:
+            imported_email, imported_phone = _resume_contacts(document.text)
+            inferred: list[str] = []
+            missing: list[str] = []
+            if not email and not profile.person.contact.email:
+                email = imported_email
+                (inferred if email else missing).append("邮箱")
+            if not phone and not profile.person.contact.phone:
+                phone = imported_phone
+                (inferred if phone else missing).append("电话")
+            if inferred:
+                contact_warnings.append("已从简历抬头识别" + "、".join(inferred) + "，请在更多资料中核对。")
+            if missing:
+                contact_warnings.append("未能从简历抬头确认唯一" + "、".join(missing) + "，请在更多资料中补充；有多个候选时不会自动选择。")
+
+    if display_name or request.sync_visible_fields:
         profile.person.display_name = display_name
-    if email:
+    if email or request.sync_private_fields:
         profile.person.contact.email = email
-    if phone:
+    if phone or request.sync_private_fields:
         profile.person.contact.phone = phone
 
     preferences = profile.job_search
-    if request.stage:
+    if request.stage or request.sync_visible_fields:
         preferences.stage = _safe_text(request.stage, limit=160)
     for field_name, values in (
         ("target_roles", request.target_roles),
@@ -293,9 +363,9 @@ def onboard_profile(
         ("avoid", request.avoid),
     ):
         cleaned = list(dict.fromkeys(_safe_text(item, limit=80) for item in values if item.strip()))
-        if cleaned or request.mode == "replace":
+        if cleaned or request.mode == "replace" or request.sync_visible_fields:
             setattr(preferences, field_name, cleaned)
-    if any(
+    if request.sync_visible_fields or any(
         value is not None
         for value in (request.earliest_start, request.days_per_week, request.duration_months)
     ):
@@ -313,6 +383,7 @@ def onboard_profile(
         or request.transport_modes
         or request.remote_acceptable
         or request.mode == "replace"
+        or request.sync_visible_fields
     ):
         preferences.commute = CommutePreferences(
             origin=_safe_text(request.commute_origin, limit=160),
@@ -327,7 +398,7 @@ def onboard_profile(
             remote_acceptable=request.remote_acceptable,
             notes="通勤时间由用户本人填写或确认；不保存精确家庭住址。",
         )
-    if request.notes:
+    if request.notes or request.sync_private_fields:
         preferences.notes = _safe_text(request.notes, limit=600)
 
     if document is not None and resume_path is not None:
@@ -436,6 +507,147 @@ def onboard_profile(
         extracted_characters=len(document.text) if document is not None else 0,
         imported_facts=imported_facts,
         imported_skills=imported_skills,
-        warnings=document.warnings if document is not None else [],
+        warnings=(document.warnings if document is not None else []) + contact_warnings,
         replaced_profile=request.mode == "replace",
+    )
+
+
+def switch_to_new_profile(
+    request: ProfileOnboardingInput,
+    *,
+    profile_path: Path,
+    private_dir: Path,
+    output_dir: Path,
+    repository: JobRepository,
+) -> tuple[ProfileOnboardingResult, Path, Path | None, Path, Path | None]:
+    """Stage new user files and archive old user files with the DB switch."""
+
+    if request.mode != "replace":
+        raise ProfileOnboardingError("此操作仅用于切换新用户。")
+    if private_dir.is_symlink() or output_dir.is_symlink() or profile_path.is_symlink():
+        raise ProfileOnboardingError("资料路径不能是符号链接，已取消切换。")
+    private_dir = private_dir.expanduser().resolve()
+    profile_path = profile_path.expanduser().resolve()
+    output_dir = output_dir.expanduser().resolve()
+    pending = private_dir / "backups" / PENDING_NAME
+    if pending.exists():
+        raise ProfileOnboardingError("上次切换尚未恢复，请关闭并重新启动程序后重试。")
+    if profile_path.parent != private_dir or not repository.path.is_relative_to(private_dir.parent):
+        raise ProfileOnboardingError("切换用户需要 Profile 位于私有资料目录，岗位库位于同一数据目录内。")
+    if output_dir != private_dir.parent / "output" or output_dir == private_dir:
+        raise ProfileOnboardingError("输出目录并非专用 data/output，已取消切换以保护其他文件。")
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ProfileOnboardingError("输出路径不是目录，已取消切换。")
+    backup_dir = private_dir / "backups"
+    if backup_dir.is_symlink():
+        raise ProfileOnboardingError("备份目录不能是符号链接，已取消切换。")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    suffix = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid.uuid4().hex[:8]
+    staging_dir = backup_dir / f".profile-switch-staging-{suffix}"
+    failed_staging = backup_dir / f"failed-profile-switch-{suffix}"
+    private_archive = backup_dir / f"profile-switch-private-{suffix}"
+    output_archive = output_dir.with_name(f"output-profile-switch-{suffix}")
+    failed_output = output_dir.with_name(f"output-failed-switch-{suffix}")
+    for target in (staging_dir, failed_staging, private_archive, output_archive, failed_output):
+        if target.exists():
+            raise ProfileOnboardingError(f"切换暂存或备份位置已存在: {target}")
+    staging_dir.mkdir()
+
+    def quarantine_failure(exc: Exception) -> NoReturn:
+        try:
+            staging_dir.replace(failed_staging)
+        except OSError as quarantine_exc:
+            raise ProfileOnboardingError(
+                f"切换失败，暂存文件仍在 {staging_dir}，请手动保留并检查；"
+                f"归档失败: {quarantine_exc}；原错误: {exc}"
+            ) from exc
+        message = f"{exc}；未完成的上传文件已归档到 {failed_staging}，可供恢复。"
+        if isinstance(exc, JobDatabaseError):
+            raise JobDatabaseError(message) from exc
+        raise ProfileOnboardingError(message) from exc
+
+    staged_path = staging_dir / profile_path.name
+    try:
+        result = onboard_profile(request, profile_path=staged_path, private_dir=staging_dir)
+    except Exception as exc:
+        quarantine_failure(exc)
+
+    # Keep the exact old bytes for compensation; never overwrite the backup.
+    try:
+        old_bytes = profile_path.read_bytes() if profile_path.is_file() else None
+        profile_backup: Path | None = None
+        if old_bytes is not None:
+            profile_backup = backup_dir / f"{profile_path.stem}-switch-{suffix}{profile_path.suffix}"
+            if profile_backup.exists():
+                raise ProfileOnboardingError(f"资料备份已存在: {profile_backup}")
+            write_bytes_atomic(old_bytes, profile_backup)
+    except Exception as exc:
+        quarantine_failure(exc)
+
+    old_output_exists = output_dir.is_dir()
+    reserved = {"backups", "app-settings.json", "api-usage.json", "agent-token.json"}
+    if profile_path.parent == private_dir:
+        reserved.add(profile_path.name)
+    if repository.path.parent == private_dir:
+        reserved.update({
+            repository.path.name, repository.path.name + "-wal",
+            repository.path.name + "-shm", repository.path.name + "-journal",
+        })
+
+    record = {
+        "version": 1,
+        "suffix": suffix,
+        "profile_path": str(profile_path),
+        "database_path": str(repository.path.resolve()),
+        "old_profile_sha256": hashlib.sha256(old_bytes).hexdigest() if old_bytes is not None else None,
+        "old_output_exists": old_output_exists,
+        "old_private_names": [item.name for item in private_dir.iterdir() if item.name not in reserved],
+        "new_private_names": [item.name for item in staging_dir.iterdir() if item != staged_path],
+    }
+
+    def prepare_publish(database_backup: Path) -> None:
+        record["database_backup"] = str(database_backup)
+        write_json_atomic(record, pending)
+
+    def publish() -> None:
+        if old_output_exists:
+            output_dir.replace(output_archive)
+        output_dir.mkdir()
+        private_archive.mkdir()
+        for item in private_dir.iterdir():
+            if item.name in reserved:
+                continue
+            if (private_archive / item.name).exists():
+                raise ProfileOnboardingError("私有资料备份发生同名冲突，已取消切换。")
+            item.replace(private_archive / item.name)
+        for item in staging_dir.iterdir():
+            if item == staged_path:
+                continue
+            if (private_dir / item.name).exists():
+                raise ProfileOnboardingError("新资料与旧文件同名，已取消切换。")
+            item.replace(private_dir / item.name)
+        staged_path.replace(profile_path)
+
+    def restore() -> None:
+        restore_files(record, marker=pending, profile_path=profile_path,
+                      private_dir=private_dir, output_dir=output_dir)
+        finish_record(pending, suffix, "rolled_back")
+
+    try:
+        database_backup = repository.backup_and_clear_for_new_profile(
+            backup_dir, publish_profile=publish, restore_profile=restore,
+            prepare_publish=prepare_publish, profile_switch_id=suffix,
+        )
+    except Exception as exc:
+        quarantine_failure(exc)
+    # A crash before this rename is resolved by the transaction's DB marker.
+    finish_record(pending, suffix, "committed")
+    current_resume = (
+        private_dir / "resumes" / result.resume_path.name
+        if result.resume_path is not None else None
+    )
+    return (
+        replace(result, profile_path=profile_path, resume_path=current_resume),
+        database_backup, profile_backup, private_archive,
+        output_archive if old_output_exists else None,
     )

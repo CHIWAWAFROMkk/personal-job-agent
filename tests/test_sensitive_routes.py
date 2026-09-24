@@ -6,7 +6,6 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest.mock import patch
 
 from job_agent.services.dashboard import create_dashboard_server
 from job_agent.services.job_repository import JobRepository
@@ -21,8 +20,6 @@ class SensitiveRoutesTests(unittest.TestCase):
         self.profile = sample_profile()
         self.profile_path = self.root / "profile.json"
         save_profile(self.profile, self.profile_path)
-        self.lan_patch = patch("job_agent.services.sms_sync.get_lan_ip", return_value="127.0.0.1")
-        self.lan_patch.start()
         self.server = create_dashboard_server(JobRepository(self.root / "jobs.sqlite3"),
             output_dir=self.root / "output", port=0, profile_path=self.profile_path, private_dir=self.root)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -34,7 +31,6 @@ class SensitiveRoutesTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
-        self.lan_patch.stop()
         self.temp.cleanup()
 
     def request(self, path, method="GET", headers=None):
@@ -47,10 +43,11 @@ class SensitiveRoutesTests(unittest.TestCase):
         except urllib.error.HTTPError as error:
             result = error
         with result:
-            return result.status, json.loads(result.read().decode("utf-8"))
+            body = result.read().decode("utf-8")
+            return result.status, json.loads(body) if result.headers.get_content_type() == "application/json" else body
 
     def test_sensitive_routes_reject_missing_and_wrong_tokens(self):
-        for path, method in [("/api/profile", "GET"), ("/api/agent/token", "POST"), ("/api/sms/setup", "POST")]:
+        for path, method in [("/api/profile", "GET"), ("/api/agent/token", "POST")]:
             for headers in [{}, {"X-Job-Agent-Token": "synthetic-invalid-token"}]:
                 with self.subTest(path=path, headers_present=bool(headers)):
                     status, payload = self.request(path, method, headers)
@@ -70,7 +67,7 @@ class SensitiveRoutesTests(unittest.TestCase):
             self.assertIn('error', json.loads(body))
 
     def test_sensitive_routes_reject_foreign_origins_even_with_action_token(self):
-        for path, method in [("/api/profile", "GET"), ("/api/agent/token", "POST"), ("/api/sms/setup", "POST")]:
+        for path, method in [("/api/profile", "GET"), ("/api/agent/token", "POST")]:
             for origin in ["https://evil.example", "chrome-extension://synthetic", "moz-extension://synthetic", "null"]:
                 with self.subTest(path=path, origin=origin):
                     status, _ = self.request(path, method, {"X-Job-Agent-Token": self.token, "Origin": origin})
@@ -89,19 +86,15 @@ class SensitiveRoutesTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(agent["agent_token"])
         self.assertNotEqual(agent["agent_token"], self.token)
-        status, setup = self.request("/api/sms/setup", "POST", headers)
-        self.assertEqual(status, 200)
-        self.assertIn("/api/sms/webhook?token=", setup["webhook_url"])
-        self.assertNotIn(agent["agent_token"], setup["webhook_url"])
-        self.assertIn("latest_code", setup)
-        self.assertTrue((self.root / "sms-webhook-token.json").is_file())
 
-    def test_public_sms_status_has_no_secrets_or_messages(self):
-        status, payload = self.request("/api/sms/status")
-        self.assertEqual(status, 200)
-        self.assertTrue(payload["ok"])
-        for key in ["latest_code", "token", "sms_webhook_token", "agent_token", "webhook_url", "raw_text"]:
-            self.assertNotIn(key, payload)
+    def test_removed_sms_routes_are_unavailable(self):
+        headers = {"X-Job-Agent-Token": self.token, "Origin": self.base}
+        for path, method in [("/api/sms/setup", "POST"), ("/api/sms/status", "GET"),
+                             ("/api/sms/manual", "POST"), ("/api/sms/clear", "POST"),
+                             ("/api/sms/webhook", "POST")]:
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path, method, headers)[0], 404 if method == "GET" else 405)
+        self.assertFalse((self.root / "sms-webhook-token.json").exists())
 
 
 if __name__ == "__main__":

@@ -66,12 +66,18 @@ class AmapCommuteProvider:
         self._api_key = key
         self._fetch_json = fetch_json or self._request_json
         self._request_count = 0
+        self._attempted_count = 0
 
     @property
     def request_count(self) -> int:
         return self._request_count
 
+    @property
+    def attempted_count(self) -> int:
+        return self._attempted_count
+
     def _fetch(self, endpoint: str, params: dict[str, str]) -> dict[str, object]:
+        self._attempted_count += 1
         payload = self._fetch_json(endpoint, params)
         self._request_count += 1
         return payload

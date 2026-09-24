@@ -14,6 +14,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Callable
 
 from job_agent.services.ai_errors import safe_ai_error_message
 from job_agent.services.resume_editor import validate_resume_content
@@ -33,6 +34,12 @@ _MAX_SKILL_COUNT = 12
 _MAX_SUMMARY_CHARS = 500
 _MAX_BULLET_CHARS = 300
 _MAX_INSTRUCTION_CHARS = 2000
+
+# A whole-resume composition can emit far more text than a wording polish.
+# Both stay below the browser's 180-second write deadline; SDK retries remain
+# disabled because a timed-out paid request may still have completed remotely.
+SHORT_RESUME_AI_TIMEOUT_SECONDS = 45.0
+LONG_RESUME_AI_TIMEOUT_SECONDS = 120.0
 
 _SYSTEM_PROMPT = (
     Path(__file__).resolve().parent.parent
@@ -171,6 +178,12 @@ def polish_resume_content_locally(
 
     for section in list(merged.get("experience_sections") or []):
         section_title = str(section.get("title") or "")  # type: ignore[union-attr]
+        if section_title == "相关经历" and all(
+            entry.get("experience_kind") == "other" for entry in section.get("entries", [])
+        ):
+            # Imported paragraphs have no verified work/project grouping. Keep
+            # education, dates and source wording intact instead of inventing labels.
+            continue
         is_work = "工作" in section_title or "实习" in section_title
         is_other = section_title in {"其他经历", "校园经历", "志愿经历"}
         section["title"] = section_title if is_other else ("工作经历" if is_work else "项目经历")  # type: ignore[index]
@@ -221,12 +234,15 @@ def _invoke_ai(
     *,
     system_prompt: str = _SYSTEM_PROMPT,
     max_output_tokens: int = 1600,
+    timeout_seconds: float = SHORT_RESUME_AI_TIMEOUT_SECONDS,
+    request_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> tuple[str, int, int]:
     """按运行配置调用云端 AI；供测试 monkeypatch。"""
+    invoke = request_call or (lambda call: call())
     if config.ai.provider == "codex":
         from job_agent.services.codex_bridge import CodexBridgeError, codex_completion
         try:
-            return codex_completion(system_prompt, user_payload, model=config.ai.model)
+            return invoke(lambda: codex_completion(system_prompt, user_payload, model=config.ai.model))
         except CodexBridgeError as exc:
             raise CloudAIUnavailableError(str(exc)) from exc
     try:
@@ -240,7 +256,11 @@ def _invoke_ai(
         if config.ai.provider == "openai":
             if not config.ai.api_key:
                 raise CloudAIUnavailableError("OpenAI API Key 尚未配置。")
-            response = OpenAI(api_key=config.ai.api_key, timeout=45, max_retries=0).responses.create(
+            response = invoke(lambda: OpenAI(
+                api_key=config.ai.api_key,
+                timeout=timeout_seconds,
+                max_retries=0,
+            ).responses.create(
                 model=config.ai.model,
                 store=False,
                 input=[
@@ -248,15 +268,15 @@ def _invoke_ai(
                     {"role": "user", "content": user_payload},
                 ],
                 max_output_tokens=max_output_tokens,
-            )
+            ))
             content = (getattr(response, "output_text", "") or "").strip()
         elif config.ai.provider == "deepseek":
             if not config.ai.api_key:
                 raise CloudAIUnavailableError("DeepSeek API Key 尚未配置。")
-            response = OpenAI(
+            response = invoke(lambda: OpenAI(
                 api_key=config.ai.api_key,
                 base_url=config.ai.base_url or "https://api.deepseek.com",
-                timeout=45,
+                timeout=timeout_seconds,
                 max_retries=0,
             ).chat.completions.create(
                 model=config.ai.model or "deepseek-chat",
@@ -266,15 +286,15 @@ def _invoke_ai(
                 ],
                 temperature=0.3,
                 max_tokens=max_output_tokens,
-            )
+            ))
             content = (response.choices[0].message.content or "").strip()
         elif config.ai.provider == "openai_compatible":
             if not config.ai.base_url:
                 raise CloudAIUnavailableError("OpenAI 兼容 API 地址尚未配置。")
-            response = OpenAI(
+            response = invoke(lambda: OpenAI(
                 api_key=config.ai.api_key or "local-api-no-key",
                 base_url=config.ai.base_url,
-                timeout=45,
+                timeout=timeout_seconds,
                 max_retries=0,
             ).chat.completions.create(
                 model=config.ai.model,
@@ -284,7 +304,7 @@ def _invoke_ai(
                 ],
                 temperature=0.3,
                 max_tokens=max_output_tokens,
-            )
+            ))
             content = (response.choices[0].message.content or "").strip()
         else:
             raise CloudAIUnavailableError("当前 AI Provider 不支持云端润色。")
@@ -317,6 +337,7 @@ def polish_resume_content_with_jd(
     *,
     config: RuntimeConfig,
     user_instruction: str = "",
+    request_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> ResumePolishSuggestion:
     """按 JD 关键词润色措辞，返回建议内容（不写盘、不改变原对象）。"""
     if config.ai.provider == "local":
@@ -357,7 +378,7 @@ def polish_resume_content_with_jd(
         ensure_ascii=False,
     )
 
-    raw, input_tokens, output_tokens = _invoke_ai(config, user_payload)
+    raw, input_tokens, output_tokens = _invoke_ai(config, user_payload, request_call=request_call)
     parsed = _parse_model_json(raw)
 
     polished_summary = parsed.get("summary")

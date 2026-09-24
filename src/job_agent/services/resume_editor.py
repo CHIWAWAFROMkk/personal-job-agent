@@ -17,6 +17,9 @@ from job_agent.services.portable_resume import (
     PortableResumeFiles,
     _render_resume_version,
     find_latest_resume_manifest,
+    inherit_resume_fact_review,
+    read_resume_manifest,
+    resume_manifest_fact_review_sources,
 )
 
 PORTABLE_TEMPLATE_ID = "portable-evidence-resume-v1"
@@ -122,7 +125,7 @@ def validate_resume_content(content: object) -> dict[str, object]:
             allow_empty=True,
         )
 
-    _require_str(content.get("summary"), "summary", max_chars=_MAX_SUMMARY_CHARS)
+    _require_str(content.get("summary"), "summary", max_chars=_MAX_SUMMARY_CHARS, allow_empty=True)
     if "self_evaluation" in content:
         _require_str(content["self_evaluation"], "self_evaluation", max_chars=300, allow_empty=True)
 
@@ -167,7 +170,11 @@ def validate_resume_content(content: object) -> dict[str, object]:
                 not entry.get("experience_kind") and "项目" in section["title"]
             )
             organization = entry.get("organization")
-            if project_entry and (organization is None or organization == ""):
+            if entry.get("experience_kind") == "other":
+                # Imported source paragraphs and qualifications may have no
+                # structured employer/project. Require their actual bullets below.
+                _require_str(organization, f"{entry_name}.organization", max_chars=_MAX_FIELD_CHARS, allow_empty=True)
+            elif project_entry and (organization is None or organization == ""):
                 _require_str(entry.get("role"), f"“{section['title']}”第{entry_index + 1}段的项目名称", max_chars=_MAX_FIELD_CHARS)
             else:
                 _require_str(
@@ -230,6 +237,22 @@ def rerender_edited_resume(
     generated_at = generated_at or datetime.now(UTC)
     target = dict(content["target"])  # type: ignore[arg-type]
     job_id = int(target.get("job_id") or 0)
+    if based_on:
+        parent_path = Path(based_on).resolve()
+        applications_root = Path(applications_dir).expanduser().resolve()
+        if not parent_path.is_relative_to(applications_root):
+            raise ResumeEditorError("上一版简历路径不属于当前工作区。")
+        parent = read_resume_manifest(parent_path)
+        if parent is None or parent["target"]["job_id"] != job_id:
+            raise ResumeEditorError("上一版简历与当前岗位不一致，请重新打开草稿。")
+        inherit_resume_fact_review(
+            content, parent,
+            sources=resume_manifest_fact_review_sources(parent_path, parent),
+        )
+    else:
+        inherit_resume_fact_review(content)
+    # Approvals belong to a specific rendered version, never to editable content.
+    content.pop("fact_approval", None)
     stamp = generated_at.strftime("%Y%m%dT%H%M%S%fZ")
     content["resume_version_id"] = f"resume-{stamp}-job-{job_id}-portable-edited-v1"
     output_dir = (

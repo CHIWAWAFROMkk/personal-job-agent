@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import Profile
@@ -27,10 +29,22 @@ class OutreachResult:
     engine: str
 
 
+def _is_identity_line(statement: str, profile: Profile) -> bool:
+    text = unicodedata.normalize("NFKC", statement).strip()
+    for value in (profile.person.display_name, profile.person.legal_name):
+        name = unicodedata.normalize("NFKC", value or "").strip()
+        if name and re.fullmatch(rf"(?:姓名\s*[:：]\s*)?{re.escape(name)}(?:\s*\([^()\n]{{1,30}}\))?", text):
+            return True
+    return False
+
+
 def generate_greetings(
     job: JobDetail,
     profile: Profile,
     config: RuntimeConfig,
+    *,
+    on_cloud_response: Callable[[object], None] | None = None,
+    on_cloud_failure: Callable[[Exception], None] | None = None,
 ) -> OutreachResult:
     """根据真实经历库与岗位 JD 生成 3 种高质量、高回复率的开聊招呼语。"""
     evidence = profile.application_context()
@@ -61,14 +75,21 @@ def generate_greetings(
                 )
                 user_msg = f"【岗位信息】\n公司: {job.company}\n职位: {job.title}\nJD: {job.jd_text[:2000]}\n\n【我的真实经历与技能】\n技能: {', '.join([s.get('name','') for s in skills[:6]])}\n经历要点:\n{evidence_summary}"
                 
-                chat_res = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    temperature=0.4,
-                )
+                try:
+                    chat_res = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        temperature=0.4,
+                    )
+                except Exception as exc:
+                    if on_cloud_failure is not None:
+                        on_cloud_failure(exc)
+                    raise
+                if on_cloud_response is not None:
+                    on_cloud_response(chat_res)
                 content = (chat_res.choices[0].message.content or "").strip()
                 import re
                 m = re.search(r"\{.*\}", content, re.DOTALL)
@@ -86,7 +107,8 @@ def generate_greetings(
     role, company = job.title, job.company
     skill_names = [s["name"] for s in skills]
     skill_text = f"我的已确认技能包括：{'、'.join(skill_names[:6])}。" if skill_names else ""
-    facts = [f["statement"] for e in experiences for f in e["facts"]]
+    facts = [f["statement"] for e in experiences for f in e["facts"]
+             if not _is_identity_line(f["statement"], profile)]
     fact_text = f"我的相关经历：{facts[0]}" if facts else ""
     return OutreachResult(
         greetings=[

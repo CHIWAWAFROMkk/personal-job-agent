@@ -4,8 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from job_agent.models.profile import EvidenceFact, Experience
-from job_agent.services.resume_compose import compose_resume_content_with_jd
-from job_agent.services.resume_polish import ResumePolishError
+from job_agent.services.resume_compose import compose_resume_content_with_jd, build_resume_fact_comparisons
+from job_agent.services.portable_resume import resume_fact_review_required
+from job_agent.services.resume_polish import LONG_RESUME_AI_TIMEOUT_SECONDS, ResumePolishError
 from job_agent.services.runtime_config import RuntimeConfig, AIConnectorConfig
 from tests.helpers import sample_profile
 from tests.test_resume_polish import _content
@@ -40,6 +41,7 @@ class ResumeComposeTests(unittest.TestCase):
         self.assertEqual(entry["organization"], "示例大学")
         self.assertEqual(self.content, original)
         payload = json.loads(invoke.call_args.args[1])
+        self.assertEqual(invoke.call_args.kwargs["timeout_seconds"], LONG_RESUME_AI_TIMEOUT_SECONDS)
         rendered = json.dumps(payload)
         self.assertNotIn("private@example.com", rendered)
         self.assertNotIn("123456", rendered)
@@ -82,6 +84,18 @@ class ResumeComposeTests(unittest.TestCase):
         result, _ = self.compose()
         self.assertIn("fact-award", result.content["truthfulness"]["confirmed_fact_ids"])
 
+    def test_new_achievement_without_source_remains_pending_for_personal_fact_review(self):
+        response = copy.deepcopy(self.response)
+        response["entries"][0]["bullets"][0]["text"] = (
+            "设计问卷并整理100份有效答卷，项目获得国家级一等奖。"
+        )
+        result, _ = self.compose(response)
+        review = result.content["generation"]["fact_review"]
+        self.assertEqual(review["status"], "pending_user_review")
+        comparison = next(row for row in review["comparisons"] if row["field"] == "bullet")
+        self.assertIn("形成调研报告", comparison["source"])
+        self.assertIn("国家级一等奖", comparison["draft"])
+
     def test_rejects_duplicate_experiences_and_unsupported_summary_metrics(self):
         response = copy.deepcopy(self.response)
         response["entries"] *= 2
@@ -91,3 +105,27 @@ class ResumeComposeTests(unittest.TestCase):
         response["summary"] = "实现100%准确率。"
         with self.assertRaises(ResumePolishError):
             self.compose(response)
+
+    def test_cloud_comparisons_allow_no_summary_but_keep_current_claim_and_fact_gate(self):
+        response = copy.deepcopy(self.response)
+        response["entries"][0]["bullets"][0]["text"] = "设计问卷并整理100份有效答卷，项目获得国家级一等奖。"
+        result, _ = self.compose(response)
+        content = result.content
+        content["summary"] = ""
+        content["self_evaluation"] = ""
+        comparisons = build_resume_fact_comparisons(content, self.profile)
+        self.assertEqual(len(comparisons), 1)
+        self.assertIn("国家级一等奖", comparisons[0]["draft"])
+        self.assertIn("形成调研报告", comparisons[0]["source"])
+        self.assertNotIn("国家级一等奖", comparisons[0]["source"])
+        self.assertTrue(resume_fact_review_required(content))
+        for field, value in (("fact_ids", ["missing"]), ("fact_ids", ["fact-pending-tableau"]), ("text", " ")):
+            with self.subTest(field=field, value=value):
+                invalid = copy.deepcopy(content)
+                invalid["experience_sections"][0]["entries"][0]["bullets"][0][field] = value
+                with self.assertRaises(ResumePolishError):
+                    build_resume_fact_comparisons(invalid, self.profile)
+        invalid = copy.deepcopy(content)
+        invalid["experience_sections"] = []
+        with self.assertRaises(ResumePolishError):
+            build_resume_fact_comparisons(invalid, self.profile)

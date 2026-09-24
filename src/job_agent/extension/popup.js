@@ -1,4 +1,4 @@
-let currentJob = null, boundTab = null, fillData = null;
+let currentJob = null, boundTab = null, fillData = null, profileContext = null;
 const $ = id => document.getElementById(id);
 const names = {name:"姓名",phone:"电话",email:"邮箱",school:"学校",major:"专业",degree:"学历",experience:"经历"};
 function status(message) { $("fillStatus").textContent = message; }
@@ -16,10 +16,20 @@ async function request(path, body) {
   const base = PjaSafety.localBase($("serverUrl").value.trim());
   const token = $("agentToken").value.trim();
   if (!token) throw new Error("请在本地连接设置中填写 Agent Token");
-  const res = await fetch(base + path, {method:body === undefined ? "GET":"POST", redirect:"error", credentials:"omit", cache:"no-store", signal:AbortSignal.timeout(8000), headers:{"Content-Type":"application/json","X-Agent-Token":token}, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
+  if (body !== undefined && !profileContext) throw new Error("请重新打开扩展弹窗，以确认当前用户资料后再保存。");
+  const headers = {"Content-Type":"application/json","X-Agent-Token":token};
+  if (body !== undefined) headers["X-Profile-Context"] = profileContext;
+  const res = await fetch(base + path, {method:body === undefined ? "GET":"POST", redirect:"error", credentials:"omit", cache:"no-store", signal:AbortSignal.timeout(8000), headers, ...(body === undefined ? {} : {body:JSON.stringify(body)})});
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
   return data;
+}
+async function bindProfileContext() {
+  // Bind this popup once. Fetching a fresh context at write time would allow
+  // an old, still-open popup to write its previous user's data after a switch.
+  const state = await request("/api/agent/state");
+  if (!state.profile_context) throw new Error("本地服务尚未提供用户资料校验，请更新程序后重试。");
+  profileContext = state.profile_context;
 }
 async function helper(tab, action, fields) {
   await unchanged(tab);
@@ -63,18 +73,6 @@ async function confirmFill() {
   const filled = result.result.filled.map(k => names[k]).join("、") || "无";
   status(`已静默预填：${filled}。已有内容、重复或不明确的字段已跳过。部分网站需手动重输；请核对后手动上传和提交。`);
 }
-async function receiveOtp() {
-  const tab = await page(), jobId = PjaSafety.jobId($("jobId").value.trim());
-  PjaSafety.localBase($("serverUrl").value.trim());
-  const data = await request(`/api/jobs/${jobId}/fill-data`);
-  await unchanged(tab); sourceMatches(data,tab);
-  await chrome.storage.local.set({serverUrl:$("serverUrl").value.trim(),agentToken:$("agentToken").value.trim()});
-  const arm = await helper(tab,"arm");
-  const result = await chrome.runtime.sendMessage({action:"START_BOUND_CODE",tabId:tab.id,url:tab.url,documentId:arm.documentId,jobId});
-  if (!result?.ready) throw new Error(result?.error || "无法创建验证码连接");
-  await helper(tab,"start");
-  status("已连接 2 分钟。现在可关闭扩展面板，去工作台录入短信验证码。填入后需本人核对；必要时手动重输，不自动提交。");
-}
 async function sendToAgent() {
   if (!currentJob) throw new Error("尚未识别岗位");
   const data = await request("/api/jobs/import-parsed",{company:currentJob.company,title:currentJob.title,jd_text:currentJob.jd_text,location:currentJob.location,source_url:currentJob.source_url,source:`web_${currentJob.platform || "extension"}`});
@@ -92,12 +90,13 @@ async function init() {
   if (stored.serverUrl) $("serverUrl").value = stored.serverUrl;
   if (stored.agentToken) $("agentToken").value = stored.agentToken;
   for (const id of ["serverUrl","agentToken"]) $(id).addEventListener("change",async () => {
-    fillData = null; $("fillReview").hidden = true;
-    try { PjaSafety.localBase($("serverUrl").value.trim()); await chrome.storage.local.set({[id]:$(id).value.trim()}); }
+    fillData = null; profileContext = null; $("fillReview").hidden = true;
+    try { PjaSafety.localBase($("serverUrl").value.trim()); await chrome.storage.local.set({[id]:$(id).value.trim()}); await bindProfileContext(); }
     catch(err) { status(err.message); }
   });
+  try { await bindProfileContext(); } catch(err) { status(err.message); }
   $("jobId").addEventListener("input",() => {fillData=null;$("fillReview").hidden=true;});
-  for (const [id,fn] of [["loadFillBtn",loadFields],["confirmFillBtn",confirmFill],["otpBtn",receiveOtp],["sendBtn",sendToAgent]]) $(id).addEventListener("click",() => run($(id),fn));
+  for (const [id,fn] of [["loadFillBtn",loadFields],["confirmFillBtn",confirmFill],["sendBtn",sendToAgent]]) $(id).addEventListener("click",() => run($(id),fn));
   try {
     const tab = await page(); $("pageHost").textContent = new URL(tab.url).hostname;
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:["content.js"]});

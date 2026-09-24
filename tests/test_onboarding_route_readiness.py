@@ -64,8 +64,11 @@ class OnboardingRouteReadinessTests(unittest.TestCase):
         original = self.handler.profile_path.read_bytes()
         content = self._generate_actual_draft()
         entry = content['experience_sections'][0]['entries'][0]
-        self.assertEqual(content['experience_sections'][0]['title'], '其他经历')
-        self.assertEqual(entry['organization'], '机构 / 项目名称待完善')
+        self.assertEqual(content['experience_sections'][0]['title'], '相关经历')
+        self.assertEqual(entry['organization'], '')
+        self.assertEqual(entry['role'], '')
+        self.assertTrue(entry['bullets'])
+        self.assertTrue(all(bullet['fact_ids'] for bullet in entry['bullets']))
         self.assertEqual(original, self.handler.profile_path.read_bytes())
 
     def _generate_actual_draft(self):

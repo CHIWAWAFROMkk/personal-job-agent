@@ -4,11 +4,14 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
+import time
 import unicodedata
+import weakref
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from job_agent.models.application_tracking import (
@@ -184,15 +187,30 @@ def build_candidate_sighting_key(
 
 
 class JobRepository:
+    # A caller holds its lock strongly while initializing; unused test/data paths
+    # can leave the cache without evicting a lock held by another thread.
+    _init_locks: weakref.WeakValueDictionary[Path, threading.Lock] = weakref.WeakValueDictionary()
+    _init_locks_mutex = threading.Lock()
+
     def __init__(self, path: Path) -> None:
         self.path = path.expanduser().resolve()
 
+    @classmethod
+    def _get_init_lock(cls, path: Path) -> threading.Lock:
+        with cls._init_locks_mutex:
+            resolved = path.expanduser().resolve()
+            lock = cls._init_locks.get(resolved)
+            if lock is None:
+                lock = threading.Lock()
+                cls._init_locks[resolved] = lock
+            return lock
+
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, timeout=5)
+        connection = sqlite3.connect(self.path, timeout=15)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA busy_timeout = 15000")
         return connection
 
     @contextmanager
@@ -205,212 +223,40 @@ class JobRepository:
             connection.close()
 
     def initialize(self) -> Path:
-        with self._connection() as connection:
-            has_metadata = connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'"
-            ).fetchone()
-            existing = connection.execute(
-                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-            ).fetchone() if has_metadata else None
-            if existing and existing["value"] not in COMPATIBLE_SCHEMA_VERSIONS:
-                raise JobDatabaseError(
-                    "数据库版本不兼容："
-                    f"当前 {existing['value']}，程序要求 {SCHEMA_VERSION}。"
-                )
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS schema_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS archived_jobs (
-                    job_id INTEGER PRIMARY KEY REFERENCES jobs(id)
-                );
-
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    dedupe_key TEXT NOT NULL UNIQUE,
-                    company TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    location TEXT,
-                    jd_text TEXT NOT NULL,
-                    published_at TEXT,
-                    deadline_at TEXT,
-                    status TEXT NOT NULL DEFAULT 'discovered',
-                    match_score INTEGER CHECK(match_score BETWEEN 0 AND 100),
-                    recommendation TEXT,
-                    commute_minutes INTEGER CHECK(commute_minutes BETWEEN 0 AND 600),
-                    commute_method TEXT NOT NULL DEFAULT '',
-                    commute_note TEXT NOT NULL DEFAULT '',
-                    commute_origin TEXT NOT NULL DEFAULT '',
-                    commute_destination TEXT NOT NULL DEFAULT '',
-                    commute_mode TEXT NOT NULL DEFAULT '',
-                    commute_distance_meters INTEGER
-                        CHECK(commute_distance_meters BETWEEN 0 AND 5000000),
-                    commute_route_summary TEXT NOT NULL DEFAULT '',
-                    commute_provider TEXT NOT NULL DEFAULT '',
-                    commute_updated_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS job_sources (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                    source_key TEXT NOT NULL UNIQUE,
-                    platform TEXT NOT NULL,
-                    source_url TEXT,
-                    external_id TEXT,
-                    jd_text TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS match_results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                    result_hash TEXT NOT NULL UNIQUE,
-                    score INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100),
-                    recommendation TEXT NOT NULL,
-                    engine TEXT NOT NULL,
-                    scoring_version TEXT NOT NULL,
-                    result_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS applications (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER NOT NULL UNIQUE
-                        REFERENCES jobs(id) ON DELETE CASCADE,
-                    status TEXT NOT NULL,
-                    resume_path TEXT,
-                    application_pack_path TEXT,
-                    source_url TEXT,
-                    applied_at TEXT,
-                    last_verified_at TEXT,
-                    verification_method TEXT NOT NULL DEFAULT '',
-                    evidence_path TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS application_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    application_id INTEGER NOT NULL
-                        REFERENCES applications(id) ON DELETE CASCADE,
-                    previous_status TEXT,
-                    status TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    detail TEXT NOT NULL DEFAULT '',
-                    evidence_path TEXT,
-                    occurred_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS interview_debriefs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    application_id INTEGER NOT NULL
-                        REFERENCES applications(id) ON DELETE CASCADE,
-                    debrief_hash TEXT NOT NULL UNIQUE,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS tracking_reminders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-                    kind TEXT NOT NULL CHECK(kind IN ('oa', 'interview')),
-                    at TEXT NOT NULL,
-                    url TEXT NOT NULL DEFAULT '',
-                    completed INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(job_id, kind, at)
-                );
-                CREATE TABLE IF NOT EXISTS tracking_requests (
-                    request_id TEXT PRIMARY KEY,
-                    payload_hash TEXT NOT NULL,
-                    response_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS search_candidates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    candidate_key TEXT NOT NULL UNIQUE,
-                    canonical_url TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    snippet TEXT NOT NULL DEFAULT '',
-                    verification_status TEXT NOT NULL DEFAULT 'pending',
-                    verification_detail TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    verified_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS search_candidate_sightings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    candidate_id INTEGER NOT NULL
-                        REFERENCES search_candidates(id) ON DELETE CASCADE,
-                    sighting_key TEXT NOT NULL UNIQUE,
-                    provider TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    snippet TEXT NOT NULL DEFAULT '',
-                    first_seen_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_jobs_score
-                    ON jobs(match_score DESC);
-                CREATE INDEX IF NOT EXISTS idx_jobs_status
-                    ON jobs(status);
-                CREATE INDEX IF NOT EXISTS idx_sources_job
-                    ON job_sources(job_id);
-                CREATE INDEX IF NOT EXISTS idx_matches_job_created
-                    ON match_results(job_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_applications_status_updated
-                    ON applications(status, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_application_events_application
-                    ON application_events(application_id, occurred_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_interview_debriefs_application
-                    ON interview_debriefs(application_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_candidates_status_seen
-                    ON search_candidates(verification_status, last_seen_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_candidate_sightings_candidate
-                    ON search_candidate_sightings(candidate_id);
-                """
-            )
-            job_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(jobs)")
-            }
-            commute_columns = {
-                "commute_minutes": "INTEGER CHECK(commute_minutes BETWEEN 0 AND 600)",
-                "commute_method": "TEXT NOT NULL DEFAULT ''",
-                "commute_note": "TEXT NOT NULL DEFAULT ''",
-                "commute_origin": "TEXT NOT NULL DEFAULT ''",
-                "commute_destination": "TEXT NOT NULL DEFAULT ''",
-                "commute_mode": "TEXT NOT NULL DEFAULT ''",
-                "commute_distance_meters": (
-                    "INTEGER CHECK(commute_distance_meters BETWEEN 0 AND 5000000)"
-                ),
-                "commute_route_summary": "TEXT NOT NULL DEFAULT ''",
-                "commute_provider": "TEXT NOT NULL DEFAULT ''",
-                "commute_updated_at": "TEXT",
-            }
-            for column_name, declaration in commute_columns.items():
-                if column_name not in job_columns:
-                    connection.execute(
-                        f"ALTER TABLE jobs ADD COLUMN {column_name} {declaration}"
-                    )
-            connection.execute(
-                "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
-                (SCHEMA_VERSION,),
-            )
+        max_attempts = 4
+        for attempt in range(max_attempts):
+            try:
+                with self._get_init_lock(self.path):
+                    with self._connection() as connection:
+                        has_metadata = connection.execute(
+                            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'"
+                        ).fetchone()
+                        existing = connection.execute(
+                            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+                        ).fetchone() if has_metadata else None
+                        if existing:
+                            try:
+                                ver_int = int(existing["value"])
+                                if ver_int > int(SCHEMA_VERSION) or existing["value"] not in COMPATIBLE_SCHEMA_VERSIONS:
+                                    raise JobDatabaseError(
+                                        "数据库版本不兼容："
+                                        f"当前 {existing['value']}，程序要求 {SCHEMA_VERSION}。"
+                                    )
+                            except ValueError:
+                                raise JobDatabaseError(
+                                    f"数据库版本标识无效: '{existing['value']}'。"
+                                )
+                        from job_agent.services.db_migration import MigrationError, run_database_migrations
+                        try:
+                            run_database_migrations(connection, auto_backup_path=self.path)
+                        except MigrationError as exc:
+                            raise JobDatabaseError(str(exc)) from exc
+                return self.path
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower() and attempt < max_attempts - 1:
+                    time.sleep(0.15 * (2 ** attempt))
+                    continue
+                raise
         return self.path
 
     def upsert_job(self, record: JobRecordInput) -> JobUpsertResult:
@@ -669,13 +515,20 @@ class JobRepository:
         self,
         *,
         status: CandidateVerificationStatus | None = None,
-        limit: int = 20,
+        limit: int | None = 20,
+        offset: int = 0,
     ) -> list[SearchCandidateListItem]:
         self.initialize()
         if status is not None and status not in CANDIDATE_VERIFICATION_STATUSES:
             raise JobDatabaseError(f"不支持的候选核验状态: {status}")
+        if offset < 0 or (offset and limit is None):
+            raise JobDatabaseError("候选岗位分页参数无效")
         where_clause = "WHERE search_candidates.verification_status = ?" if status else ""
-        parameters: tuple[object, ...] = (status, limit) if status else (limit,)
+        parameters: tuple[object, ...] = (status,) if status else ()
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ? OFFSET ?"
+            parameters += (limit, offset)
         with self._connection() as connection:
             rows = connection.execute(
                 f"""
@@ -696,7 +549,7 @@ class JobRepository:
                 {where_clause}
                 GROUP BY search_candidates.id
                 ORDER BY search_candidates.last_seen_at DESC
-                LIMIT ?
+                {limit_clause}
                 """,
                 parameters,
             ).fetchall()
@@ -716,45 +569,73 @@ class JobRepository:
             for row in rows
         ]
 
-    def add_match_result(self, job_id: int, result: MatchResult) -> bool:
+    def count_search_candidates(
+        self, *, status: CandidateVerificationStatus | None = None
+    ) -> int:
         self.initialize()
-        payload = result.model_dump(mode="json")
-        result_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        result_hash = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
-        now = _utc_now()
+        if status is not None and status not in CANDIDATE_VERIFICATION_STATUSES:
+            raise JobDatabaseError(f"不支持的候选核验状态: {status}")
         with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO match_results(
-                    job_id, result_hash, score, recommendation, engine,
-                    scoring_version, result_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    result_hash,
-                    result.overall_score,
-                    result.recommendation.value,
-                    result.engine,
-                    result.scoring_version,
-                    result_json,
-                    now,
-                ),
-            )
-            connection.execute(
-                """
-                UPDATE jobs
-                SET match_score = ?, recommendation = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    result.overall_score,
-                    result.recommendation.value,
-                    now,
-                    job_id,
-                ),
-            )
-        return cursor.rowcount > 0
+            if status is None:
+                row = connection.execute("SELECT COUNT(*) FROM search_candidates").fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT COUNT(*) FROM search_candidates WHERE verification_status = ?",
+                    (status,),
+                ).fetchone()
+        return int(row[0])
+
+    def add_match_result(self, job_id: int, result: MatchResult) -> bool:
+        return bool(self.add_match_results([(job_id, result)]))
+
+    def add_match_results(self, results: list[tuple[int, MatchResult]]) -> int:
+        """Persist a refresh in one transaction without changing match history rules."""
+        if not results:
+            return 0
+        self.initialize()
+        prepared = []
+        for job_id, result in results:
+            payload = result.model_dump(mode="json")
+            result_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            result_hash = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+            prepared.append((job_id, result, result_json, result_hash))
+        now = _utc_now()
+        inserted = 0
+        with self._connection() as connection:
+            for job_id, result, result_json, result_hash in prepared:
+                cursor = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO match_results(
+                        job_id, result_hash, score, recommendation, engine,
+                        scoring_version, result_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        result_hash,
+                        result.overall_score,
+                        result.recommendation.value,
+                        result.engine,
+                        result.scoring_version,
+                        result_json,
+                        now,
+                    ),
+                )
+                inserted += cursor.rowcount
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET match_score = ?, recommendation = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        result.overall_score,
+                        result.recommendation.value,
+                        now,
+                        job_id,
+                    ),
+                )
+        return inserted
 
     def archived_jobs(self) -> set[int]:
         self.initialize()
@@ -775,6 +656,67 @@ class JobRepository:
         self.initialize()
         with self._connection() as connection:
             return [int(row[0]) for row in connection.execute("SELECT id FROM jobs ORDER BY id")]
+
+    def list_job_details(self) -> list[JobDetail]:
+        """Read every dashboard job and its sources with two queries."""
+        self.initialize()
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, company, title, location, jd_text, published_at,
+                       deadline_at, status, match_score, recommendation,
+                       commute_minutes, commute_method, commute_note,
+                       commute_origin, commute_destination, commute_mode,
+                       commute_distance_meters, commute_route_summary,
+                       commute_provider, commute_updated_at, created_at,
+                       updated_at, first_seen_at, last_seen_at
+                FROM jobs
+                ORDER BY match_score IS NULL, match_score DESC, last_seen_at DESC
+                """
+            ).fetchall()
+            source_rows = connection.execute(
+                """
+                SELECT job_id, platform, source_url, external_id,
+                       first_seen_at, last_seen_at
+                FROM job_sources
+                ORDER BY job_id, last_seen_at DESC, id DESC
+                """
+            ).fetchall()
+        sources_by_job: dict[int, list[JobSourceItem]] = {}
+        for source in source_rows:
+            sources_by_job.setdefault(int(source["job_id"]), []).append(
+                JobSourceItem(
+                    platform=source["platform"],
+                    source_url=source["source_url"],
+                    external_id=source["external_id"],
+                    first_seen_at=source["first_seen_at"],
+                    last_seen_at=source["last_seen_at"],
+                )
+            )
+        return [
+            JobDetail(
+                job_id=int(row["id"]),
+                company=row["company"], title=row["title"],
+                location=row["location"], jd_text=row["jd_text"],
+                published_at=row["published_at"], deadline_at=row["deadline_at"],
+                status=row["status"], match_score=row["match_score"],
+                recommendation=row["recommendation"],
+                commute_minutes=row["commute_minutes"],
+                commute_method=row["commute_method"],
+                commute_note=row["commute_note"],
+                commute_origin=row["commute_origin"],
+                commute_destination=row["commute_destination"],
+                commute_mode=row["commute_mode"],
+                commute_distance_meters=row["commute_distance_meters"],
+                commute_route_summary=row["commute_route_summary"],
+                commute_provider=row["commute_provider"],
+                commute_updated_at=row["commute_updated_at"],
+                sources=sources_by_job.get(int(row["id"]), []),
+                created_at=row["created_at"], updated_at=row["updated_at"],
+                first_seen_at=row["first_seen_at"], last_seen_at=row["last_seen_at"],
+            )
+            for row in rows
+        ]
 
     def match_refresh_inputs(self) -> list[dict]:
         self.initialize()
@@ -1466,19 +1408,54 @@ class JobRepository:
             for row in rows
         ]
 
+    def list_application_events_by_job(self) -> dict[int, list[ApplicationEvent]]:
+        """Read the complete feedback timeline for dashboard summaries."""
+        self.initialize()
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT applications.job_id,
+                       application_events.id, application_events.application_id,
+                       application_events.previous_status,
+                       application_events.status, application_events.source,
+                       application_events.detail, application_events.evidence_path,
+                       application_events.occurred_at
+                FROM application_events
+                JOIN applications ON applications.id = application_events.application_id
+                ORDER BY application_events.occurred_at, application_events.id
+                """
+            ).fetchall()
+        events_by_job: dict[int, list[ApplicationEvent]] = {}
+        for row in rows:
+            events_by_job.setdefault(int(row["job_id"]), []).append(
+                ApplicationEvent(
+                    event_id=int(row["id"]),
+                    application_id=int(row["application_id"]),
+                    previous_status=row["previous_status"],
+                    status=row["status"], source=row["source"],
+                    detail=row["detail"], evidence_path=row["evidence_path"],
+                    occurred_at=row["occurred_at"],
+                )
+            )
+        return events_by_job
+
     def list_applications(
         self,
         *,
         status: ApplicationStatus | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[ApplicationListItem]:
         self.initialize()
         if status is not None and status not in APPLICATION_STATUSES:
             raise JobDatabaseError(f"不支持的投递状态: {status}")
-        if limit < 1 or limit > 1000:
+        if limit is not None and (limit < 1 or limit > 1000):
             raise JobDatabaseError("投递列表数量必须在 1 到 1000 之间。")
         where_clause = "WHERE applications.status = ?" if status else ""
-        parameters: tuple[object, ...] = (status, limit) if status else (limit,)
+        parameters: tuple[object, ...] = (status,) if status else ()
+        limit_clause = ""
+        if limit is not None:
+            limit_clause = "LIMIT ?"
+            parameters += (limit,)
         with self._connection() as connection:
             rows = connection.execute(
                 f"""
@@ -1490,7 +1467,7 @@ class JobRepository:
                 JOIN jobs ON jobs.id = applications.job_id
                 {where_clause}
                 ORDER BY applications.updated_at DESC, applications.id DESC
-                LIMIT ?
+                {limit_clause}
                 """,
                 parameters,
             ).fetchall()
@@ -1660,8 +1637,23 @@ class JobRepository:
             manual_review_candidates=candidate_counts.get("needs_manual_review", 0),
         )
 
-    def backup_and_clear_for_new_profile(self, backup_dir: Path) -> Path:
-        """Create a recoverable SQLite backup, then clear user-specific job data."""
+    def backup_and_clear_for_new_profile(
+        self,
+        backup_dir: Path,
+        *,
+        publish_profile: Callable[[], None] | None = None,
+        restore_profile: Callable[[], None] | None = None,
+        prepare_publish: Callable[[Path], None] | None = None,
+        profile_switch_id: str | None = None,
+    ) -> Path:
+        """Back up and clear all user tables in one write transaction.
+
+        A staged Profile can be published just before commit. If publication or
+        commit fails, roll back the database and restore the former Profile.
+        """
+
+        if (publish_profile is None) != (restore_profile is None):
+            raise ValueError("发布与恢复 Profile 必须成对提供。")
 
         self.initialize()
         backup_dir = backup_dir.expanduser().resolve()
@@ -1672,29 +1664,85 @@ class JobRepository:
             raise JobDatabaseError(f"岗位数据库备份已存在: {backup_path}")
 
         source = self._connect()
-        destination = sqlite3.connect(backup_path)
+        publish_attempted = False
+        backup_complete = False
         try:
-            source.backup(destination)
-            destination.commit()
-        except sqlite3.Error as exc:
-            raise JobDatabaseError(f"岗位数据库备份失败: {exc}") from exc
-        finally:
-            destination.close()
-            source.close()
+            # The reserved writer lock keeps another process from changing the
+            # database between the backup and the clear. A separate reader
+            # backs up the last committed snapshot, including in WAL mode.
+            source.execute("BEGIN IMMEDIATE")
+            backup_reader = self._connect()
+            try:
+                destination = sqlite3.connect(backup_path)
+                try:
+                    backup_reader.backup(destination)
+                    destination.commit()
+                    backup_complete = True
+                finally:
+                    destination.close()
+            finally:
+                backup_reader.close()
 
-        try:
-            with self._connection() as connection:
-                connection.execute("DELETE FROM application_events")
-                connection.execute("DELETE FROM applications")
-                connection.execute("DELETE FROM match_results")
-                connection.execute("DELETE FROM job_sources")
-                connection.execute("DELETE FROM search_candidate_sightings")
-                connection.execute("DELETE FROM search_candidates")
-                connection.execute("DELETE FROM jobs")
-        except sqlite3.Error as exc:
+            user_tables = {
+                "archived_jobs", "jobs", "job_sources", "match_results",
+                "applications", "application_events", "search_candidates",
+                "search_candidate_sightings", "tracking_reminders",
+                "tracking_requests", "interview_debriefs",
+                "mock_interview_sessions", "mock_interview_requests",
+            }
+            actual_tables = {
+                row[0] for row in source.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                )
+            } - {"schema_meta", "schema_migrations"}
+            if actual_tables != user_tables:
+                raise JobDatabaseError("数据库用户记录表与预期不符，已取消切换，请先检查数据库版本。")
+            # Identifiers here come only from this fixed tuple, never from a
+            # request or database content.
+            for table in (
+                "interview_debriefs", "application_events", "applications",
+                "tracking_reminders", "archived_jobs", "match_results",
+                "job_sources", "search_candidate_sightings", "search_candidates",
+                "tracking_requests", "mock_interview_requests",
+                "mock_interview_sessions", "jobs",
+            ):
+                source.execute(f"DELETE FROM {table}")
+            if publish_profile is not None:
+                if prepare_publish is not None:
+                    prepare_publish(backup_path)
+                if profile_switch_id is not None:
+                    source.execute(
+                        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES ('profile_switch_id',?)",
+                        (profile_switch_id,),
+                    )
+                publish_attempted = True
+                publish_profile()
+            source.commit()
+        except Exception as exc:
+            recovery_errors: list[str] = []
+            try:
+                source.rollback()
+            except Exception as rollback_exc:
+                recovery_errors.append(f"数据库回滚失败: {rollback_exc}")
+            if publish_attempted and restore_profile is not None:
+                try:
+                    restore_profile()
+                except Exception as restore_exc:
+                    recovery_errors.append(f"Profile 恢复失败: {restore_exc}")
+            if recovery_errors:
+                raise JobDatabaseError(
+                    "切换失败且自动恢复未完成，请停止使用并从备份恢复。"
+                    f"数据库备份: {backup_path if backup_complete else '未完成'}；"
+                    + "；".join(recovery_errors)
+                ) from exc
+            if isinstance(exc, JobDatabaseError):
+                raise
             raise JobDatabaseError(
-                f"已创建备份，但切换新用户时清理岗位库失败: {exc}"
+                "切换新用户失败，原有资料与岗位库已恢复；"
+                f"数据库备份: {backup_path if backup_complete else '未完成'}；原因: {exc}"
             ) from exc
+        finally:
+            source.close()
         return backup_path
 
     def verify(self) -> None:

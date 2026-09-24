@@ -12,8 +12,9 @@ from job_agent.services.profile_onboarding import (
     ProfileOnboardingError,
     ProfileOnboardingInput,
     onboard_profile,
+    switch_to_new_profile,
 )
-from job_agent.services.profile_store import ProfileStoreError
+from job_agent.services.profile_store import ProfileStoreError, load_profile
 from job_agent.services.dashboard import _split_values, _optional_int
 from job_agent.services.resume_reader import ResumeReadError
 from job_agent.services.job_repository import JobDatabaseError
@@ -24,6 +25,23 @@ from job_agent.services.portable_resume import (
 from job_agent.services.dashboard import _parse_multipart
 from job_agent.services.dashboard_routes.dashboard_api import _profile_summary
 from job_agent.constants import MAX_UPLOAD_BODY as _MAX_UPLOAD_BODY, MAX_JSON_BODY as _MAX_JSON_BODY
+
+
+@route("GET", r"/api/profile/edit")
+def handle_get_profile_edit(handler):
+    if not handler._authorized_action():
+        handler._reject_unauthorized_action()
+        return
+    try:
+        profile = load_profile(handler.profile_path)
+    except (ProfileStoreError, OSError) as exc:
+        handler._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    handler._json({
+        "email": profile.person.contact.email,
+        "phone": profile.person.contact.phone,
+        "notes": profile.job_search.notes,
+    })
 
 @route("POST", r"/api/profile/photo")
 def handle_post_profile_photo(handler):
@@ -189,19 +207,36 @@ def handle_post_profile_onboard(handler):
             major=fields.get("major", ""),
             graduation=fields.get("graduation", "").strip() or None,
             notes=fields.get("notes", ""),
+            sync_visible_fields=fields.get("sync_visible_fields", "").casefold() in truthy,
+            sync_private_fields=fields.get("sync_private_fields", "").casefold() in truthy,
             confirm_truth=fields.get("confirm_truth", "").casefold() in truthy,
             confirm_replace=fields.get("confirm_replace", "").casefold() in truthy,
         )
-        result = onboard_profile(
-            request,
-            profile_path=handler.profile_path,
-            private_dir=handler.private_dir,
-        )
         database_backup = None
-        if result.replaced_profile:
-            database_backup = handler.repository.backup_and_clear_for_new_profile(
-                handler.private_dir / "backups"
+        profile_backup = None
+        private_backup = None
+        output_backup = None
+        if request.mode == "replace":
+            result, database_backup, profile_backup, private_backup, output_backup = switch_to_new_profile(
+                request,
+                profile_path=handler.profile_path,
+                private_dir=handler.private_dir,
+                output_dir=handler.output_dir,
+                repository=handler.repository,
             )
+            with handler.assist_lock:
+                handler.assist_runs.clear()
+            # The replacement is committed while the exclusive user-state
+            # lease is held. Invalidate every page/extension bound to the old
+            # person before releasing that lease to queued requests.
+            new_action_token = handler._advance_profile_context()
+        else:
+            result = onboard_profile(
+                request,
+                profile_path=handler.profile_path,
+                private_dir=handler.private_dir,
+            )
+            new_action_token = None
     except (
         ValueError,
         ProfileOnboardingError,
@@ -224,6 +259,10 @@ def handle_post_profile_onboard(handler):
             "imported_skills": result.imported_skills,
             "warnings": result.warnings,
             "replaced_profile": result.replaced_profile,
+            "action_token": new_action_token,
             "database_backup": str(database_backup) if database_backup else None,
+            "profile_backup": str(profile_backup) if profile_backup else None,
+            "private_backup": str(private_backup) if private_backup else None,
+            "output_backup": str(output_backup) if output_backup else None,
         }
     )

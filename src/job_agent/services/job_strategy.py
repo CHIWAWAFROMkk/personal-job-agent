@@ -162,7 +162,12 @@ def evaluate_job_strategy(
         primary_roles=primary_roles,
         adjacent_roles=adjacent_roles,
     )
-    pay_min, pay_max = parse_daily_compensation(text)
+    # Daily-pay parsing is only meaningful for internships. On large job
+    # histories, scanning every full-time JD with the salary regex dominates
+    # repeated dashboard refreshes without changing any displayed decision.
+    pay_min, pay_max = (
+        parse_daily_compensation(text) if track == "daily_internship" else (None, None)
+    )
     outsourcing_risk = detect_outsourcing(text)
     workload_risk = any(marker in text.casefold() for marker in _WORKLOAD_MARKERS)
     remaining_days = _deadline_days(job.deadline_at, today)

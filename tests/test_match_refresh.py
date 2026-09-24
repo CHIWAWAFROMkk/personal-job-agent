@@ -6,7 +6,7 @@ from unittest.mock import patch
 from tests.helpers import sample_profile
 from job_agent.models.job_record import JobRecordInput
 from job_agent.services.job_repository import JobRepository
-from job_agent.services.match_refresh import ensure_current_match
+from job_agent.services.match_refresh import ensure_current_match, refresh_all_matches
 from job_agent.services.dashboard_routes.dashboard_api import build_dashboard_snapshot
 from job_agent.services.profile_store import save_profile
 
@@ -52,3 +52,22 @@ class MatchRefreshTests(unittest.TestCase):
         row=next(row for row in snapshot.tracked_jobs if row.job_id==self.job.job_id)
         self.assertEqual(row.match_score,after.overall_score)
         self.assertEqual(self.repo.get_job(self.job.job_id).status,self.job.status)
+
+    def test_bulk_refresh_caches_every_job_across_batch_boundary(self):
+        for index in range(104):
+            self.repo.upsert_job(JobRecordInput(
+                company=f'测试公司 {index}', title=f'SQL 实习 {index}',
+                jd_text='本科在读，SQL 数据分析，每周四天。', source='test',
+            ))
+        refresh_all_matches(self.repo, self.profile)
+        self.assertEqual(self.repo.stats().match_results, 105)
+        self.assertEqual(len(self.repo.match_refresh_inputs()), 105)
+
+        with patch('job_agent.services.match_refresh.match_job_locally') as scorer:
+            refresh_all_matches(self.repo, self.profile)
+        scorer.assert_not_called()
+        self.assertEqual(self.repo.stats().match_results, 105)
+
+        self.profile.skills = []
+        refresh_all_matches(self.repo, self.profile)
+        self.assertEqual(self.repo.stats().match_results, 210)

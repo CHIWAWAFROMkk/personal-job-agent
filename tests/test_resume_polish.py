@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import re
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from job_agent.services.ai_errors import safe_ai_error_message
 from job_agent.services.resume_polish import (
+    LONG_RESUME_AI_TIMEOUT_SECONDS,
     ResumePolishError,
+    SHORT_RESUME_AI_TIMEOUT_SECONDS,
+    _invoke_ai,
     polish_resume_content_locally,
     polish_resume_content_with_jd,
 )
@@ -56,6 +60,27 @@ JD = "负责短视频内容数据分析和 A/B 实验设计，精通 SQL 与数�
 
 
 class ResumePolishTests(unittest.TestCase):
+    @mock.patch("openai.OpenAI")
+    def test_cloud_resume_calls_have_task_specific_timeouts_and_no_retries(self, factory) -> None:
+        factory.return_value.responses.create.return_value = SimpleNamespace(
+            output_text='{"ok": true}',
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        )
+        factory.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok": true}'))],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+        )
+        for provider in ("openai", "deepseek", "openai_compatible"):
+            config = RuntimeConfig(ai=AIConnectorConfig(
+                provider=provider, model="test-model", api_key="synthetic-key",
+                base_url="https://example.com/v1" if provider == "openai_compatible" else None,
+            ))
+            for timeout in (SHORT_RESUME_AI_TIMEOUT_SECONDS, LONG_RESUME_AI_TIMEOUT_SECONDS):
+                with self.subTest(provider=provider, timeout=timeout):
+                    _invoke_ai(config, "synthetic resume", timeout_seconds=timeout)
+                    self.assertEqual(factory.call_args.kwargs["timeout"], timeout)
+                    self.assertEqual(factory.call_args.kwargs["max_retries"], 0)
+
     def test_cloud_error_message_hides_provider_payload_and_explains_401(self) -> None:
         class UnauthorizedError(RuntimeError):
             status_code = 401

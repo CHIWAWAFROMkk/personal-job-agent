@@ -16,8 +16,11 @@ class AIProviderError(RuntimeError):
     pass
 
 
+QUICK_AI_REQUEST_TIMEOUT_SECONDS = 25.0
+
+
 def get_openai_client(config):
-    """Build a bounded OpenAI-compatible client; never guess compatible model IDs."""
+    """Build a client for quick helpers; browser interview calls expire at 30s."""
     from openai import OpenAI
 
     ai = config.ai
@@ -35,7 +38,12 @@ def get_openai_client(config):
         model = model or "gpt-4o"
     elif not model or not base_url:
         raise AIProviderError("兼容服务需要明确填写模型名称和服务地址。")
-    return OpenAI(api_key=ai.api_key, base_url=base_url, timeout=15.0, max_retries=0), model
+    return OpenAI(
+        api_key=ai.api_key,
+        base_url=base_url,
+        timeout=QUICK_AI_REQUEST_TIMEOUT_SECONDS,
+        max_retries=0,
+    ), model
 
 
 @dataclass(frozen=True)

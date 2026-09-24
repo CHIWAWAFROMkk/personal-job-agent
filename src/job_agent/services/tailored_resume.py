@@ -15,6 +15,10 @@ from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import EvidenceFact, Experience, ExperienceKind, Profile
 from job_agent.services.application_pack import extract_job_themes
 from job_agent.services.job_repository import normalize_company, normalize_title
+from job_agent.services.portable_resume import (
+    PortableResumeError, resume_manifest_fact_review_required,
+    verified_resume_content_sha256,
+)
 
 
 class TailoredResumeError(RuntimeError):
@@ -724,7 +728,9 @@ def build_tailored_resume_draft(
     )
 
 
-def approve_resume_visual_review(manifest_path: Path) -> Path:
+def approve_resume_visual_review(
+    manifest_path: Path, *, fact_review_confirmed: bool = False,
+) -> Path:
     manifest_path = manifest_path.expanduser().resolve()
     if not manifest_path.is_file():
         raise TailoredResumeError(f"简历质检清单不存在: {manifest_path}")
@@ -733,8 +739,17 @@ def approve_resume_visual_review(manifest_path: Path) -> Path:
     except (OSError, json.JSONDecodeError) as exc:
         raise TailoredResumeError(f"简历质检清单无法读取: {exc}") from exc
     qa = manifest.get("qa", {})
-    if qa.get("pdf_visual_review") != "pending_user_review":
+    fact_review_required = resume_manifest_fact_review_required(manifest_path, manifest)
+    visual_status = qa.get("pdf_visual_review")
+    if visual_status != "pending_user_review" and not (fact_review_required and visual_status == "passed"):
         raise TailoredResumeError("该简历不处于待人工版面确认状态。")
+    if fact_review_required and not fact_review_confirmed:
+        raise TailoredResumeError("云端改写需本人单独核对原句与改写，不能只确认 PDF 版面。")
+    if fact_review_required:
+        try:
+            content_sha256 = verified_resume_content_sha256(manifest_path, manifest)
+        except PortableResumeError as exc:
+            raise TailoredResumeError(str(exc)) from exc
     artifacts = manifest.get("artifacts", {})
     for kind in ("docx", "pdf"):
         info = artifacts.get(kind, {})
@@ -743,12 +758,22 @@ def approve_resume_visual_review(manifest_path: Path) -> Path:
         if not path.is_file() or not expected or _sha256(path) != expected:
             raise TailoredResumeError(f"{kind.upper()} 文件缺失或哈希已变化，不能批准。")
     qa["pdf_visual_review"] = "passed"
-    manifest["visual_approval"] = {
-        "approved_at": datetime.now(UTC).isoformat(),
-        "approved_by": "user",
-        "statement": "用户已打开并确认 PDF 版面无误。",
-    }
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    if visual_status == "pending_user_review":
+        manifest["visual_approval"] = {
+            "approved_at": datetime.now(UTC).isoformat(),
+            "approved_by": "user",
+            "statement": "用户已打开并确认 PDF 版面无误。",
+        }
+    if fact_review_required:
+        qa["truthfulness_check"] = "passed"
+        manifest["fact_approval"] = {
+            "approved_at": datetime.now(UTC).isoformat(),
+            "approved_by": "user",
+            "statement": "本人已逐项对照原事实与改写核对内容。",
+            "pdf_sha256": str(artifacts["pdf"]["sha256"]).upper(),
+            "content_sha256": content_sha256,
+        }
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     output = manifest_path.with_name(f"resume-version-approved-{stamp}.json")
     if output.exists():
         raise TailoredResumeError(f"批准记录已存在，拒绝覆盖: {output}")

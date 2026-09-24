@@ -21,6 +21,11 @@ from job_agent.models.job import HardGateStatus, MatchResult, MatchStatus
 from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import ClaimStatus, EvidenceFact, Experience, Profile
 from job_agent.services.job_repository import normalize_company, normalize_title
+from job_agent.services.portable_resume import (
+    find_latest_resume_manifest, read_resume_manifest,
+    resume_manifest_fact_approved,
+    resume_manifest_fact_review_required,
+)
 
 
 class ApplicationPackError(RuntimeError):
@@ -446,11 +451,14 @@ def _load_resume_bundle(
     directory = content_path.parent
     manifest_candidates: list[tuple[int, float, Path, dict]] = []
     for manifest_path in directory.glob("resume-version*.json"):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        # Legacy manifests may omit job_id; this scan is already constrained
+        # to the content file's directory and matches company/title below.
+        manifest = read_resume_manifest(manifest_path, allow_legacy_without_job_id=True)
+        if manifest is None:
             continue
-        target = manifest.get("target", {})
+        target = manifest["target"]
+        if target.get("job_id") not in {None, job.job_id}:
+            continue
         target_matches = (
             normalize_company(str(target.get("company", "")))
             == normalize_company(job.company)
@@ -462,9 +470,12 @@ def _load_resume_bundle(
         content_source = manifest.get("content_source")
         priority = 2 if content_source == content_path.name else 1 if not content_source else 0
         if priority:
-            manifest_candidates.append(
-                (priority, manifest_path.stat().st_mtime, manifest_path, manifest)
-            )
+            try:
+                manifest_candidates.append(
+                    (priority, manifest_path.stat().st_mtime, manifest_path, manifest)
+                )
+            except OSError:
+                continue
 
     manifest_path: Path | None = None
     docx_path: Path | None = None
@@ -497,6 +508,8 @@ def _load_resume_bundle(
             and _sha256(pdf_path) == expected_pdf
         )
         qa = manifest.get("qa", {})
+        fact_review_required = resume_manifest_fact_review_required(manifest_path, manifest)
+        fact_reviewed = resume_manifest_fact_approved(manifest_path, manifest)
         photo_ok = (
             qa.get("photo_requirement") == "not_required"
             or qa.get("photo_embedded") is True
@@ -505,6 +518,7 @@ def _load_resume_bundle(
         base_qa_verified = bool(
             hashes_match
             and qa.get("truthfulness_check") == "passed"
+            and (not fact_review_required or fact_reviewed)
             and qa.get("docx_structural_review") == "passed"
             and qa.get("pdf_pages") == 1
             and photo_ok
@@ -529,6 +543,9 @@ def _load_resume_bundle(
     if qa_verified:
         status = "ready"
         note = "已通过事实引用、文件哈希、真实性、嵌入照片、DOCX 结构和单页 PDF 质检。"
+    elif manifest_candidates and fact_review_required and hashes_match and visual_status in {"pending_user_review", "passed"}:
+        status = "needs_review"
+        note = "云端改写需本人逐项对照原事实，并单独检查 PDF 版面后才可投递。"
     elif visual_status == "pending_user_review" and not problem:
         status = "needs_review"
         note = "机器质检已通过；请打开 PDF 检查版面，确认后才能标记为可投。"
@@ -559,6 +576,24 @@ def resolve_resume_bundle(
         if not path.is_file():
             raise ApplicationPackError(f"定向简历内容不存在: {path}")
         return _load_resume_bundle(path, profile, job)
+
+    latest_manifest_path = find_latest_resume_manifest(applications_dir, job.job_id)
+    if latest_manifest_path is not None:
+        latest_manifest = read_resume_manifest(latest_manifest_path)
+        if (
+            latest_manifest is not None
+            and resume_manifest_fact_review_required(latest_manifest_path, latest_manifest)
+            and not resume_manifest_fact_approved(latest_manifest_path, latest_manifest)
+        ):
+            latest_content_name = latest_manifest.get("content_source")
+            if isinstance(latest_content_name, str) and Path(latest_content_name).name == latest_content_name:
+                latest_content_path = latest_manifest_path.parent / latest_content_name
+                if latest_content_path.is_file():
+                    return _load_resume_bundle(latest_content_path, profile, job)
+            return ResumeBundle(
+                status="needs_review",
+                note="最新云端来源简历尚未完成事实审核，请重新生成或检查草稿。",
+            )
 
     candidates: list[Path] = []
     if applications_dir.is_dir():

@@ -48,56 +48,22 @@ test('silent prefill does not trigger a website onchange requestSubmit handler',
   let submitted=false;first.onEvent=()=>{submitted=true;};inputs.push(first,second);
   assert.equal(api.fill({name:'示例',phone:'00000000000'}).filled.length,2);assert.equal(submitted,false);assert.deepEqual(first.events,[]);
 });
-test('OTP only binds focused empty SMS input, rejects CAPTCHA/split/occupied',async()=>{
-  const f=fixture();
-  for(const el of [new f.Input('验证码'),new f.Input('图形验证码',{attrs:{autocomplete:'one-time-code'}}),new f.Input('短信验证码',{maxLength:1}),new f.Input('短信验证码',{_value:'123456'})]) assert.equal(f.api.otpEligible(el),false);
-  const el=new f.Input('短信验证码',{type:'tel'});f.context.document.activeElement=el;f.api.arm();f.api.start();f.context.reply={code:'123456'};await f.api.tick();
-  assert.equal(el.value,'123456');assert.deepEqual(el.events,[]);assert.equal(f.messages[0].action,'POLL_BOUND_CODE');
-});
-test('OTP navigation, detached node and populated target stop without leaking code',async()=>{
-  for(const mutate of [f=>{f.context.location.href+='?other';},f=>{f.context.document.activeElement.isConnected=false;},f=>{f.context.document.activeElement.value='manual';}]) {
-    const f=fixture(),el=new f.Input('短信验证码');f.context.document.activeElement=el;f.api.arm();f.api.start();mutate(f);f.context.reply={code:'123456'};await f.api.tick();assert.notEqual(el.value,'123456');assert.equal(f.messages[0].action,'CLOSE_BOUND_CODE');
-  }
-});
-test('OTP DOM replacement during async poll cannot fill old/new node',async()=>{
-  const f=fixture(),el=new f.Input('短信验证码');f.context.document.activeElement=el;f.api.arm();f.api.start();
-  f.context.chrome.runtime.sendMessage=async()=>{el.isConnected=false;return {code:'123456'};};await f.api.tick();assert.equal(el.value,'');
-});
-test('OTP timeout and unsupported code stop without dispatching any input events',async()=>{
-  for(const kind of ['expired','invalid']) {
-    const f=fixture(),el=new f.Input('短信验证码');f.context.document.activeElement=el;f.api.arm();f.api.start();
-    if(kind==='expired') f.context.Date={now:()=>Date.now()+121000};
-    f.context.reply={code:'not-a-code'};await f.api.tick();assert.equal(el.value,'');assert.deepEqual(el.events,[]);
-  }
-});
 test('manifest has only loopback hosts and click-authorized injection',()=>{
   const manifest=JSON.parse(source('manifest.json'));assert.equal(manifest.content_scripts,undefined);
   assert.deepEqual(manifest.host_permissions,['http://127.0.0.1:*/*','http://localhost:*/*']);assert.equal(manifest.permissions.includes('tabs'),false);
   assert.equal(source('fill.js').includes('fetch('),false);assert.equal(source('fill.js').includes('requestSubmit('),false);
 });
-test('background binds sender tab URL document frame and never exposes token',async()=>{
-  const storage={};let listener, calls=[];
-  const local={serverUrl:'http://127.0.0.1:8787',agentToken:'synthetic-test-token'};
-  const c=vm.createContext({URL,Date,Promise,AbortSignal,importScripts:()=>{},fetch:async(url,options)=>{calls.push({url,options});return {ok:true,json:async()=>url.endsWith('/session')?{session_id:'synthetic-session',origin:'https://jobs.example.test',expires_in:120}:url.endsWith('/poll')?{code:'123456'}:{ok:true}};},chrome:{runtime:{id:'test-extension',getURL:path=>'chrome-extension://test-extension/'+path,onMessage:{addListener:fn=>{listener=fn;}}},tabs:{get:async()=>({id:3,url:'https://jobs.example.test/apply'})},storage:{local:{get:async()=>local,setAccessLevel:async()=>{}},session:{get:async key=>({[key]:storage[key]}),set:async data=>Object.assign(storage,data),remove:async key=>{delete storage[key];},setAccessLevel:async()=>{}}}}});
-  vm.runInContext(source('safety.js'),c);vm.runInContext(source('background.js'),c);
-  const send=(request,sender)=>new Promise(resolve=>listener(request,sender,resolve));
-  const start={action:'START_BOUND_CODE',tabId:3,url:'https://jobs.example.test/apply',documentId:'doc-1',jobId:5};
-  const popup={id:'test-extension',url:'chrome-extension://test-extension/popup.html'};
-  assert.equal(Boolean((await send(start,{...popup,id:'other-extension'})).error),true);
-  assert.equal(Boolean((await send({...start,url:'http://jobs.example.test/apply'},popup)).error),true);
-  assert.equal(calls.length,0);
-  assert.equal((await send(start,popup)).ready,true);
-  const sender={id:'test-extension',tab:{id:3},frameId:0,documentId:'doc-1',url:start.url};
-  for(const bad of [{...sender,tab:{id:4}},{...sender,documentId:'doc-2'},{...sender,url:start.url+'?other'},{...sender,frameId:1}]) assert.equal((await send({action:'POLL_BOUND_CODE'},bad)).closed,true);
-  assert.equal(calls.filter(x=>x.url.endsWith('/poll')).length,0);
-  const result=await send({action:'POLL_BOUND_CODE'},sender);assert.equal(result.code,'123456');assert.equal(JSON.stringify(result).includes(local.agentToken),false);assert.equal(storage.otpBinding,undefined);
-  assert.equal((await send({action:'POLL_BOUND_CODE'},sender)).closed,true);
-  assert.equal(calls.every(x=>x.options.redirect==='error'),true);
-  await send(start,popup);storage.otpBinding.expires=Date.now()-1;
-  const before=calls.filter(x=>x.url.endsWith('/poll')).length;
-  assert.equal((await send({action:'POLL_BOUND_CODE'},sender)).closed,true);
-  assert.equal(calls.filter(x=>x.url.endsWith('/poll')).length,before);
-  local.serverUrl='http://remote.example.test';
-  assert.equal(Boolean((await send(start,popup)).error),true);
-  assert.equal(calls.some(x=>x.url.includes('remote.example.test')),false);
+test('verification code receiving and polling are removed',()=>{
+  const f=fixture();
+  for(const key of ['otpEligible','arm','start','stop','tick']) assert.equal(f.api[key],undefined);
+  assert.equal(source('popup.html').includes('otpBtn'),false);
+  for(const name of ['popup.js','fill.js','background.js']) {
+    assert.equal(/BOUND_CODE|\/api\/fill\/poll|setInterval/.test(source(name)),false);
+  }
+});
+test('background restricts local pairing credentials to trusted extension contexts',async()=>{
+  let access;
+  const c=vm.createContext({chrome:{storage:{local:{setAccessLevel:async value=>{access=value.accessLevel;}}}}});
+  vm.runInContext(source('background.js'),c);
+  assert.equal(access,'TRUSTED_CONTEXTS');
 });

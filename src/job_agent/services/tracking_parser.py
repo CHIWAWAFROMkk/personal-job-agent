@@ -5,12 +5,11 @@ missing dates, conflicting statuses and an ATS sender are not invented facts.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import ipaddress
 import re
 from urllib.parse import urlsplit
 
-SHANGHAI = timezone(timedelta(hours=8))
 MAX_MESSAGE_LENGTH = 20_000
 _ATS = re.compile(r"北森|北森测评|Moka|飞书招聘|招聘系统|测评系统|通知|短信|邮件|验证码", re.I)
 _STATUSES = {
@@ -84,8 +83,11 @@ def _status(text: str, warnings: list[str]) -> tuple[str | None, str | None]:
 
 
 def _time(text: str, kind: str, now: datetime, warnings: list[str]) -> tuple[str | None, str | None]:
-    if re.search(r"(?:UTC|GMT)\s*[+-](?!0?8\b)\d|美东|美西|纽约时间|伦敦时间|\b(?:EST|EDT|PST|PDT)\b", text, re.I):
-        warnings.append("通知包含其他时区，请人工换算并确认上海时间。")
+    # Time-zone labels may also appear without an offset. Do not silently
+    # interpret bare "UTC"/"GMT" as the computer's local time zone.
+    notice_text = re.sub(r"https?://[^\s<>\"']+", " ", text, flags=re.I)
+    if re.search(r"(?<![A-Za-z])(?:UTC|GMT)(?![A-Za-z])|北京时间|中国标准时间|东八区|美东|美西|纽约时间|伦敦时间|\b(?:EST|EDT|PST|PDT)\b", notice_text, re.I):
+        warnings.append("通知注明时区，请按本机时间人工换算并确认。")
         return None, None
     times = []
     for match in _DATE.finditer(text):
@@ -111,7 +113,7 @@ def _time(text: str, kind: str, now: datetime, warnings: list[str]) -> tuple[str
         implicit = not relative and not match.group("year")
         try:
             if relative:
-                warnings.append("相对日期按当前上海日期解析；若是旧通知，请人工修正日期。")
+                warnings.append("相对日期按当前本机日期解析；若是旧通知，请人工修正日期。")
                 offset = 2 if relative == "后天" else 1 if relative in {"明天", "明日"} else 0
                 date = (now + timedelta(days=offset)).date()
             else:
@@ -129,7 +131,10 @@ def _time(text: str, kind: str, now: datetime, warnings: list[str]) -> tuple[str
                 hour = 0
             elif period == "中午" and hour < 10:
                 hour += 12
-            value = datetime(date.year, date.month, date.day, hour, minute, int(clock.group("second") or 0), tzinfo=SHANGHAI)
+            value = datetime(
+                date.year, date.month, date.day, hour, minute,
+                int(clock.group("second") or 0),
+            ).astimezone()
         except ValueError:
             warnings.append("日期或时间无效或有歧义，请人工填写。")
             continue
@@ -147,7 +152,7 @@ def _time(text: str, kind: str, now: datetime, warnings: list[str]) -> tuple[str
         return None, None
     selected = choices[0]
     if selected[3]:
-        warnings.append("通知未注明年份，暂按当前上海年份解析，请确认；不会自动跨年。")
+        warnings.append("通知未注明年份，暂按当前本机年份解析，请确认；不会自动跨年。")
     if datetime.fromisoformat(selected[0]) < now:
         warnings.append("识别时间已过去，请核对年份和通知时效。")
     return selected[0], selected[1]
@@ -156,10 +161,10 @@ def _time(text: str, kind: str, now: datetime, warnings: list[str]) -> tuple[str
 def parse_message(text: str, now: datetime | None = None) -> dict:
     if not isinstance(text, str) or not text.strip() or len(text) > MAX_MESSAGE_LENGTH:
         raise ValueError("请提供 1–20000 字的通知文本。")
-    now = now or datetime.now(SHANGHAI)
+    now = now or datetime.now().astimezone()
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now 必须带时区。")
-    now = now.astimezone(SHANGHAI)
+    now = now.astimezone()
     warnings: list[str] = []
     companies = _companies(text)
     company = companies[0] if len(companies) == 1 else None

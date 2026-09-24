@@ -5,7 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from job_agent.services.mock_interview import MockInterviewStore, InterviewConflict, teleprompter
 from job_agent.services.runtime_config import RuntimeConfig
@@ -13,6 +13,20 @@ from tests.helpers import sample_profile
 
 
 class MockInterviewTests(unittest.TestCase):
+    def test_http_route_passes_shared_usage_file_to_store(self):
+        from job_agent.services.dashboard_routes.mock_interview_api import _run
+
+        response = Mock()
+        usage_path = Path(self.temp.name) / 'separate-private' / 'api-usage.json'
+        handler = SimpleNamespace(
+            repository=SimpleNamespace(path=self.store.path),
+            api_usage_path=usage_path,
+            _authorized_action=lambda: True,
+            _json=response,
+        )
+        _run(handler, lambda store: {'usage_path': str(store.usage_path)})
+        response.assert_called_once_with({'usage_path': str(usage_path)})
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.store = MockInterviewStore(Path(self.temp.name) / 'jobs.sqlite3')
@@ -145,3 +159,45 @@ class MockInterviewTests(unittest.TestCase):
         self.assertNotIn('private@example.com', captured[0])
         self.assertNotIn('123456', captured[0])
         self.assertNotIn('测试用户', captured[0])
+
+    def test_cloud_selection_obeys_monthly_quota_and_releases_failed_call(self):
+        from job_agent.services.api_usage import load_api_usage
+
+        self.config.ai.provider = 'openai'
+        self.config.ai.monthly_quota = 1
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=lambda **_kw: SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content='{"id":"motivation"}'),
+            )]),
+        )))
+        with patch('job_agent.services.mock_interview.get_openai_client', side_effect=RuntimeError('offline')):
+            failed = self.start(engine='cloud', cloud_consent=True)
+        self.assertIn('本地规则', failed['notice'])
+        self.assertEqual(load_api_usage(self.store.usage_path).ai.successful_requests, 0)
+
+        with patch('job_agent.services.mock_interview.get_openai_client', return_value=(client, 'test-model')) as get_client:
+            succeeded = self.start(engine='cloud', cloud_consent=True, request_id='cloud-success')
+            self.assertEqual(succeeded['notice'], '')
+            capped = self.start(engine='cloud', cloud_consent=True, request_id='cloud-capped')
+            self.assertIn('月度调用上限', capped['notice'])
+            self.assertEqual(get_client.call_count, 1)
+        self.assertEqual(load_api_usage(self.store.usage_path).ai.successful_requests, 1)
+
+    def test_invalid_cloud_selection_still_counts_successful_response(self):
+        from job_agent.services.api_usage import load_api_usage
+
+        self.config.ai.provider = 'openai'
+        self.config.ai.monthly_quota = 1
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"id":"invalid"}'))],
+            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=2),
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **_: response)))
+        with patch('job_agent.services.mock_interview.get_openai_client', return_value=(client, 'test-model')) as provider:
+            first = self.start(engine='cloud', cloud_consent=True, request_id='invalid-selection-first')
+            second = self.start(engine='cloud', cloud_consent=True, request_id='invalid-selection-second')
+            self.assertIn('本地规则', first['notice'])
+            self.assertIn('月度调用上限', second['notice'])
+            self.assertEqual(provider.call_count, 1)
+        counter = load_api_usage(self.store.usage_path).ai
+        self.assertEqual((counter.successful_requests, counter.input_tokens, counter.output_tokens), (1, 4, 2))

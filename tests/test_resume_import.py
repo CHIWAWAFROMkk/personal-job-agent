@@ -8,7 +8,9 @@ from job_agent.services.resume_import import (
     ResumeImportError,
     import_resume_text_into_draft,
 )
+from job_agent.services.resume_compose import build_resume_fact_comparisons
 from job_agent.services.runtime_config import AIConnectorConfig, RuntimeConfig
+from tests.helpers import sample_profile
 
 
 def _content() -> dict[str, object]:
@@ -145,6 +147,26 @@ class ResumeImportTests(unittest.TestCase):
         # 教育来自原文
         self.assertEqual(merged["education"][0]["institution"], "某大学")
         self.assertEqual(suggestion.warnings, [])
+        self.assertEqual(merged["generation"]["engine"], "cloud_import")
+        self.assertEqual(merged["fact_review_origin"]["source_resume_text"], RESUME_TEXT)
+        self.assertIn("cloud_import", merged["fact_review_origin"]["sources"])
+        comparisons = build_resume_fact_comparisons(merged, sample_profile())
+        self.assertEqual(comparisons[0]["source"], RESUME_TEXT)
+        self.assertIn("25%", comparisons[0]["draft"])
+
+    def test_import_inherits_existing_cloud_fact_review(self) -> None:
+        current = _content()
+        current["generation"] = {"engine": "cloud_composition"}
+        with mock.patch(
+            "job_agent.services.resume_import._invoke_ai",
+            return_value=(_ai_payload(), 3, 5),
+        ):
+            suggestion = import_resume_text_into_draft(RESUME_TEXT, current, config=self.config)
+        self.assertEqual(suggestion.content["generation"]["engine"], "cloud_import")
+        self.assertEqual(
+            set(suggestion.content["fact_review_origin"]["sources"]),
+            {"cloud_composition", "cloud_import"},
+        )
 
     def test_import_rejects_invented_numbers(self) -> None:
         invented = _ai_payload()
