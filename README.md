@@ -12,7 +12,7 @@
 - 读取 TXT、Markdown、DOCX、PDF 简历
 - 读取原始 JD
 - 生成可解释的匹配评分与硬门槛检查
-- 使用可替换的 AI Provider 接口做结构化 JD 分析：本地规则、本机 Codex、OpenAI、OpenAI 兼容 API
+- 使用可替换的 AI Provider 接口做结构化 JD 分析：本地规则、本机 Codex、OpenAI、DeepSeek、OpenAI 兼容 API
 - 独立配置博查或 Brave Search；不连接搜索 API 时仍可手动导入 JD
 - 搜索候选岗位、去重并保存到 SQLite 岗位库
 - 从岗位编号一键生成可追溯的投递材料包，并自动关联已有定向 STAR 简历
@@ -24,14 +24,27 @@
 `user_confirmed`（用户确认）的事实，才能成为投递材料或匹配证据。
 `needs_confirmation` 内容只会进入待确认清单，不能写入简历。
 
+## 第一次使用
+
+1. 在首页选择“导入简历并建立资料”，上传真实简历并填写目标岗位和城市。照片、通勤等可稍后补充。
+2. 选择“添加第一个岗位”，粘贴岗位说明或手动录入招聘信息。
+3. 进入岗位，选择“准备投递”，核对生成的简历和材料后，在招聘网站自行完成申请。
+
+没有 AI 服务也可以先使用本地能力。面试等辅助功能在岗位的“更多工具与操作”中；“投递字段预览”只显示模拟计划，不打开招聘网页。实站 AI 自动代填目前暂停，投递由本人完成。
+短信同步及验证码中转已移除；验证码直接在招聘网站由本人填写。
+
+Dream-RSI 目前仅收录本地研究资料，未接入运行时，见 [接入评估](docs/DREAM_RSI_ASSESSMENT.md)。
+独立安全复核可从 [1.0 候选源码交接](docs/SECURITY_REVIEW_HANDOFF_1.0.0rc1.md) 开始，历史修复见 [0.8.11 交接](docs/SECURITY_REVIEW_HANDOFF_0.8.11.md)。
+本轮结果见 [1.0 候选验收报告](docs/RELEASE_ACCEPTANCE_1.0.0rc1.md)。
+
 ## Windows 桌面版（推荐）
 
-桌面发行包是 `dist/PersonalJobAgent-0.8.3-Windows-x64-<构建时间>.zip`。对方不需要安装
+桌面发行包是 `dist/PersonalJobAgent-1.0.0rc1-Windows-x64-<构建时间>.zip`。对方不需要安装
 Python：完整解压后双击 `PersonalJobAgent.exe`，程序会在独立 Windows 窗口中
 打开，不会占用浏览器标签页。
 
-0.8.3 将首页改为聚焦单一主任务的“今日”工作台，并把职位、投递进度和个人资料
-拆成清晰入口；同时保留 0.8.2 的本机 Codex、证据化简历与可靠性修复。
+1.0.0rc1 补齐首次使用、离线准备、简历审阅、进度补录和桌面重启验收；
+用户切换意外中断后会先恢复一致的数据，无法确认时暂停读取与写入。
 详细变化见 [更新记录](CHANGELOG.md)。
 
 使用 Codex 时，需要另外安装并登录本机 Codex CLI，并具备可用模型权限与额度。
@@ -53,9 +66,11 @@ Python：完整解压后双击 `PersonalJobAgent.exe`，程序会在独立 Windo
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-desktop.ps1
 ```
 
-浏览器投递准备所需的 Chromium 体积较大，因此不塞进主程序。
-需要该功能时，对方可双击发行目录中的 `Install-Optional-Browser.cmd` 单独安装；
+标准桌面投递辅助使用系统默认浏览器，不需要额外 Chromium。
+`Install-Optional-Browser.cmd` 仅供可选浏览器测试或命令行辅助功能使用；
 岗位匹配、简历、API 连接、SQLite 和 Dashboard 不依赖它。
+
+首次使用、完整资料备份、并排升级、数据回退与故障处理见 [使用与恢复指南](docs/USER_GUIDE.md)。
 
 当前 ZIP 未使用商业代码签名证书签名。正式公开分发前建议购买 Windows 代码签名
 证书并签名 EXE；这不影响程序本身在其他 64 位 Windows 10/11 电脑上运行。
@@ -99,7 +114,7 @@ OpenAI 官方适配器使用 Responses API 的结构化输出；兼容适配器�
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
-程序会在 `dist` 生成不含个人资料、密钥、岗位库和浏览器登录状态的源码压缩包。对方解压后双击“安装并启动求职Agent.cmd”，再上传自己的简历并填写自己的 API 即可。普通使用者应优先选择上面的免 Python 桌面发行包。
+程序会从项目版本生成 `dist/review` 下的新源码压缩包，并在打包前后执行隐私检查。个人资料、密钥、岗位库和浏览器登录状态不在源文件集合中，已有发行包不会被覆盖。对方解压后双击“安装并启动求职Agent.cmd”，再上传自己的简历；API 可选。普通使用者应优先选择上面的免 Python 桌面发行包。
 
 ## Phase 1 命令
 

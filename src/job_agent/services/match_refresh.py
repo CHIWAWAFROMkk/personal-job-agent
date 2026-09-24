@@ -36,16 +36,32 @@ def ensure_current_match(repository, profile, job):
 def refresh_all_matches(repository, profile):
     """No API calls and no application/status writes."""
     profile_data = profile.model_dump(mode='json')
-    # One read for the entire cache, instead of opening several connections
-    # per job on every dashboard refresh.
-    for row in repository.match_refresh_inputs():
-        inputs = {'version': MATCH_CACHE_VERSION, 'profile': profile_data,
-                  'job': [row['company'], row['title'], row['location'], row['jd_text'],
-                          row['platform'] or 'dashboard', row['source_url']]}
-        fingerprint = hashlib.sha256(json.dumps(inputs, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
-        try:
-            cached = json.loads(row['result_json'] or '{}')
-        except (ValueError, TypeError):
-            cached = {}
-        if not isinstance(cached, dict) or cached.get('input_fingerprint') != fingerprint:
-            ensure_current_match(repository, profile, repository.get_job(row['id']))
+    pending = []
+    # Keep the existing per-job cache contract, but score and persist misses in
+    # batches. This avoids reopening and migrating SQLite for every new job.
+    with _lock:
+        for row in repository.match_refresh_inputs():
+            source = row['platform'] or 'dashboard'
+            inputs = {'version': MATCH_CACHE_VERSION, 'profile': profile_data,
+                      'job': [row['company'], row['title'], row['location'], row['jd_text'],
+                              source, row['source_url']]}
+            fingerprint = hashlib.sha256(json.dumps(inputs, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+            try:
+                cached = json.loads(row['result_json'] or '{}')
+            except (ValueError, TypeError):
+                cached = {}
+            if isinstance(cached, dict) and cached.get('input_fingerprint') == fingerprint:
+                continue
+            structured = structure_job_locally(
+                row['jd_text'], company=row['company'], title=row['title'],
+                location=row['location'], source=source,
+                source_url=row['source_url'],
+            )
+            result = match_job_locally(profile, structured)
+            result.input_fingerprint = fingerprint
+            pending.append((row['id'], result))
+            if len(pending) >= 100:
+                repository.add_match_results(pending)
+                pending = []
+        if pending:
+            repository.add_match_results(pending)

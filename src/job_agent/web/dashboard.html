@@ -48,7 +48,7 @@
 
         <button id="openImportJobButton" class="top-button" type="button">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M12 11v6"/><path d="M9 14h6"/></svg>
-          <span>智能录入</span>
+          <span>添加岗位</span>
         </button>
         <button id="openCopilotButton" class="top-button" type="button" aria-expanded="false" aria-controls="copilotDialog">
           <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M8 24V14a8 8 0 0 1 16 0v10M8 18h16" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><circle cx="16" cy="25" r="1.5" fill="currentColor"/></svg>
@@ -77,30 +77,6 @@
     <div id="alert" class="alert" role="alert"></div>
 
     <section id="todayPanel" class="today-panel" aria-labelledby="todayTitle">
-      <div class="gemini-hero-container">
-        <div class="gemini-hero-sparkle agent-beacon beacon-warm" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M8 24V14a8 8 0 0 1 16 0v10M8 18h16" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><circle cx="16" cy="25" r="1.5" fill="currentColor"/></svg></div>
-        <h1 id="geminiHeroGreeting" class="gemini-hero-title">让我们开始吧</h1>
-        <p class="gemini-hero-subtitle">智能求职 Agent 已准备好。为你精准匹配职位、微调经历、模拟实战面试。</p>
-        <div class="gemini-hero-chips">
-          <button class="gemini-pill-chip" type="button" data-hero-action="tailor">
-            <span class="chip-sparkle">✦</span>
-            <span>针对推荐岗位精修简历</span>
-          </button>
-          <button class="gemini-pill-chip" type="button" data-hero-action="interview">
-            <span class="chip-sparkle">🎙️</span>
-            <span>查看岗位面试准备</span>
-          </button>
-          <button class="gemini-pill-chip" type="button" data-hero-action="tracking">
-            <span class="chip-sparkle">📊</span>
-            <span>查看 48h 笔试测评倒计时</span>
-          </button>
-          <button class="gemini-pill-chip" type="button" data-hero-action="import">
-            <span class="chip-sparkle">⚡</span>
-            <span>录入新岗位 (Boss / 牛客)</span>
-          </button>
-        </div>
-      </div>
-
       <header class="today-head">
         <div>
           <h2 id="todayTitle" class="today-section-title" tabindex="-1">今天，先推进一个岗位</h2>
@@ -251,6 +227,25 @@
             </div>
           </div>
           <div id="candidateBreakdown" class="panel-body"><div class="skeleton" style="height:210px"></div></div>
+          <details id="candidateQueue" class="candidate-queue">
+            <summary>逐条核实候选链接</summary>
+            <div class="candidate-queue-body">
+              <label for="candidateStatusFilter">查看</label>
+              <select id="candidateStatusFilter">
+                <option value="needs_manual_review">待人工复核</option>
+                <option value="pending">尚未核验</option>
+                <option value="live">仍在招聘</option>
+                <option value="expired">已过期</option>
+                <option value="blocked">无法访问</option>
+                <option value="irrelevant">不相关</option>
+                <option value="all">全部候选</option>
+              </select>
+              <p class="section-note">搜索结果只是线索。打开原招聘页核实后再标记；录入正式岗位时仍需补齐公司和完整岗位说明。</p>
+              <p id="candidateQueueStatus" class="form-status" role="status" aria-live="polite" hidden></p>
+              <div id="candidateQueueList"></div>
+              <div id="candidateQueuePager" class="job-list-pagination"></div>
+            </div>
+          </details>
         </section>
       </div>
 
@@ -268,6 +263,7 @@
             <div class="field">
               <label for="statusValue">确认状态</label>
               <select id="statusValue" required>
+                <option value="" selected>请选择已核实的状态</option>
                 <option value="applied">已投递</option>
                 <option value="hr_read">HR 已读</option>
                 <option value="resume_requested">HR 索要简历</option>
@@ -367,15 +363,54 @@
       <div class="dialog-head">
         <div>
           <h2 id="profileDialogTitle" class="dialog-title">个人资料与简历</h2>
-          <p class="dialog-copy">上传真实简历并填写求职目标。系统只从原文提取，不会补写不存在的经历。</p>
+          <p class="dialog-copy">先上传简历、填写目标岗位和城市即可开始。其余信息可稍后补充。</p>
         </div>
         <button id="closeProfileButton" class="dialog-close" type="button">关闭</button>
       </div>
       <div class="dialog-body">
         <form id="profileForm" class="profile-form" enctype="multipart/form-data">
+          <p id="profileFormStatus" class="form-status" role="alert" aria-live="assertive" tabindex="-1" hidden></p>
           <section class="form-section">
-            <h3 class="form-section-title">1. 当前是谁</h3>
+            <h3 class="form-section-title">基本资料</h3>
             <div class="form-grid">
+              <div class="field">
+                <label for="displayName">姓名或称呼</label>
+                <input id="displayName" name="display_name" maxlength="80" placeholder="例如：李明">
+              </div>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">导入简历</h3>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="resumeFile">简历文件</label>
+                <input id="resumeFile" name="resume" type="file" accept=".pdf,.docx,.txt,.md">
+                <div class="form-help">首次建档或切换新用户时必须上传；更新现有求职偏好时可以留空。支持 PDF、DOCX、TXT、MD，文件仅保存在本机。</div>
+              </div>
+              <label class="checkbox-row full"><input id="confirmTruth" name="confirm_truth" value="true" type="checkbox">上传简历时，我确认其内容真实，并允许 Agent 在本机将其中的原文事实用于搜索、匹配和生成投递材料。</label>
+            </div>
+          </section>
+
+          <section class="form-section">
+            <h3 class="form-section-title">求职目标</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="targetRoles">目标岗位</label>
+                <input id="targetRoles" name="target_roles" placeholder="产品运营、数据运营、AI运营">
+              </div>
+              <div class="field">
+                <label for="preferredLocations">期望地点</label>
+                <input id="preferredLocations" name="preferred_locations" placeholder="上海、杭州">
+              </div>
+              <div class="field">
+                <label for="employmentTypes">求职类型</label>
+                <input id="employmentTypes" name="employment_types" value="实习" placeholder="实习、校招">
+              </div>
+            </div>
+          </section>
+
+<details class="form-section profile-optional"><summary>更多资料与偏好（含联系方式核对）</summary><p class="form-help">导入时会识别简历中唯一的邮箱和手机号；手填内容优先，有多个候选时不会代选。请核对联系方式，它们会用于简历与申请表。</p><div class="form-grid">
               <div class="field full">
                 <label for="profileMode">资料使用方式</label>
                 <select id="profileMode" name="mode">
@@ -385,48 +420,16 @@
                 <div class="form-help">切换新用户会先备份当前资料和岗位库，再从空白岗位库重新搜索。</div>
               </div>
               <div class="field">
-                <label for="displayName">姓名或称呼</label>
-                <input id="displayName" name="display_name" maxlength="80" placeholder="例如：李明">
-              </div>
-              <div class="field">
                 <label for="stage">求职阶段</label>
                 <input id="stage" name="stage" maxlength="160" placeholder="例如：2027 届本科，寻找实习">
               </div>
               <div class="field">
-                <label for="profileEmail">邮箱（用于申请表）</label>
+                <label for="profileEmail">邮箱（用于简历与申请表）</label>
                 <input id="profileEmail" name="email" type="email" maxlength="160" autocomplete="email">
               </div>
               <div class="field">
-                <label for="profilePhone">电话（用于申请表）</label>
+                <label for="profilePhone">电话（用于简历与申请表）</label>
                 <input id="profilePhone" name="phone" maxlength="40" autocomplete="tel">
-              </div>
-            </div>
-          </section>
-
-          <section class="form-section">
-            <h3 class="form-section-title">2. 上传真实简历</h3>
-            <div class="form-grid">
-              <div class="field full">
-                <label for="resumeFile">简历文件</label>
-                <input id="resumeFile" name="resume" type="file" accept=".pdf,.docx,.txt,.md">
-                <div class="form-help">首次建档或切换新用户时必须上传；更新现有求职偏好时可以留空。支持 PDF、DOCX、TXT、MD，文件仅保存在本机。</div>
-              </div>
-              <div class="field full profile-photo-field">
-                <label for="profilePhotoFile">证件照（默认模板必需）</label>
-                <input id="profilePhotoFile" type="file" accept="image/jpeg,image/png">
-                <div id="profilePhotoStatus" class="form-help">上传 JPG 或 PNG（≤5MB）。照片只保存在本机，并放入岗位专属简历右上角。</div>
-                <div><button id="profilePhotoUpload" class="action-button compact secondary" type="button">上传或替换证件照</button></div>
-              </div>
-              <label class="checkbox-row full"><input id="confirmTruth" name="confirm_truth" value="true" type="checkbox">上传简历时，我确认其内容真实，并允许 Agent 在本机将其中的原文事实用于搜索、匹配和生成投递材料。</label>
-            </div>
-          </section>
-
-          <section class="form-section">
-            <h3 class="form-section-title">3. 想找什么</h3>
-            <div class="form-grid">
-              <div class="field">
-                <label for="targetRoles">目标岗位</label>
-                <input id="targetRoles" name="target_roles" placeholder="产品运营、数据运营、AI运营">
               </div>
               <div class="field">
                 <label for="adjacentRoles">可接受的相邻岗位</label>
@@ -437,14 +440,6 @@
                 <input id="targetIndustries" name="target_industries" placeholder="互联网、AI、消费">
               </div>
               <div class="field">
-                <label for="preferredLocations">期望地点</label>
-                <input id="preferredLocations" name="preferred_locations" placeholder="上海、杭州">
-              </div>
-              <div class="field">
-                <label for="employmentTypes">求职类型</label>
-                <input id="employmentTypes" name="employment_types" value="实习" placeholder="实习、校招">
-              </div>
-              <div class="field">
                 <label for="mustHaves">必须满足</label>
                 <input id="mustHaves" name="must_haves" placeholder="例如：线下实习、可转正">
               </div>
@@ -452,11 +447,13 @@
                 <label for="avoid">明确不考虑</label>
                 <input id="avoid" name="avoid" placeholder="例如：纯销售、异地、无薪实习">
               </div>
-            </div>
-          </section>
-
-          <section class="form-section">
-            <h3 class="form-section-title">4. 通勤边界</h3>
+              <div class="field full profile-photo-field">
+                <label for="profilePhotoFile">证件照（可选）</label>
+                <input id="profilePhotoFile" type="file" accept="image/jpeg,image/png">
+                <div id="profilePhotoStatus" class="form-help">上传 JPG 或 PNG（≤5MB）。照片只保存在本机，并放入岗位专属简历右上角。</div>
+                <div><button id="profilePhotoUpload" class="action-button compact secondary" type="button">上传或替换证件照</button></div>
+              </div></div></details>
+          <details class="form-section profile-optional"><summary>通勤偏好（可稍后补充）</summary>
             <div class="form-grid">
               <div class="field">
                 <label for="commuteOrigin">家庭住址、居住小区或常用地铁站</label>
@@ -473,10 +470,9 @@
               </div>
               <label class="checkbox-row full"><input id="remoteAcceptable" name="remote_acceptable" value="true" type="checkbox">可以接受远程或混合办公岗位。</label>
             </div>
-          </section>
+          </details>
 
-          <section class="form-section">
-            <h3 class="form-section-title">5. 时间与教育信息</h3>
+          <details class="form-section profile-optional"><summary>到岗时间与教育信息（可稍后补充）</summary>
             <div class="form-grid">
               <div class="field">
                 <label for="earliestStart">最早开始日期</label>
@@ -514,7 +510,7 @@
                 <label class="checkbox-row"><input name="confirm_replace" value="true" type="checkbox">我确认切换为新用户；系统会备份当前 Profile 和岗位数据库，然后清空当前岗位列表重新开始。</label>
               </div>
             </div>
-          </section>
+          </details>
 
           <div class="form-actions">
             <button id="cancelProfileButton" class="action-button ghost" type="button">取消</button>
@@ -802,10 +798,10 @@
               </div>
               <div id="aiKeyField" class="field conditional-field" hidden>
                 <label for="aiApiKey">API Key</label>
-                <input id="aiApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留当前密钥">
+                <input id="aiApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留所选服务的密钥">
                 <div class="form-help">选择 OpenAI 时只能使用 OpenAI Platform 创建的密钥；博查密钥只用于岗位搜索。DeepSeek、通义、Kimi 等请选“OpenAI 兼容 API”，并填写对应地址与模型。</div>
               </div>
-              <label id="clearAiKeyRow" class="checkbox-row conditional-field" hidden><input id="clearAiApiKey" type="checkbox">删除本机已保存的 AI 密钥</label>
+              <label id="clearAiKeyRow" class="checkbox-row conditional-field" hidden><input id="clearAiApiKey" type="checkbox">删除所选 AI 服务已保存的密钥</label>
               <div class="field">
                 <label for="aiMonthlyQuota">本机月度调用上限（可选）</label>
                 <input id="aiMonthlyQuota" type="number" min="1" max="10000000" step="1" placeholder="留空则只显示已用量">
@@ -832,9 +828,9 @@
               </div>
               <div id="searchKeyField" class="field conditional-field" hidden>
                 <label for="searchApiKey">搜索 API Key</label>
-                <input id="searchApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留当前密钥">
+                <input id="searchApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="留空将保留所选服务的密钥">
               </div>
-              <label id="clearSearchKeyRow" class="checkbox-row conditional-field" hidden><input id="clearSearchApiKey" type="checkbox">删除本机已保存的搜索密钥</label>
+              <label id="clearSearchKeyRow" class="checkbox-row conditional-field" hidden><input id="clearSearchApiKey" type="checkbox">删除所选搜索服务已保存的密钥</label>
               <div class="field">
                 <label for="searchMonthlyQuota">本机月度调用上限（可选）</label>
                 <input id="searchMonthlyQuota" type="number" min="1" max="10000000" step="1" placeholder="例如购买 20 次则填 20">
@@ -887,18 +883,19 @@
     <dialog id="importJobDialog" class="profile-dialog" aria-labelledby="importJobDialogTitle">
       <div class="dialog-head">
         <div>
-          <h2 id="importJobDialogTitle" class="dialog-title">📋 智能录入岗位</h2>
-          <p class="dialog-copy">支持从微信群、网页、社群直接复制并粘贴整段招聘信息，AI 自动提取关键字段并入库评分。</p>
+          <h2 id="importJobDialogTitle" class="dialog-title">添加岗位</h2>
+          <p class="dialog-copy">粘贴岗位说明或链接，检查识别出的公司、岗位和要求，再保存。识别失败时可以直接在下方填写。</p>
         </div>
         <button id="closeImportJobButton" class="dialog-close" type="button">关闭</button>
       </div>
       <div class="dialog-body">
+        <p id="importJobStatus" class="form-status" role="status" aria-live="polite" tabindex="-1" hidden></p>
         <div class="field">
           <label for="rawJobInput">直接粘贴招聘文本（包含岗位名、要求、薪资等任意内容）</label>
           <textarea id="rawJobInput" rows="6" placeholder="例如：某互联网公司招聘 Python 后端实习生，要求熟悉 FastAPI、MySQL，大三或研一，250/天，北京海淀..."></textarea>
         </div>
         <div class="form-actions form-actions-start">
-          <button id="btnAiExtract" class="action-button" type="button">✨ AI 智能拆解并填入下表</button>
+          <button id="btnAiExtract" class="action-button" type="button">识别岗位信息</button>
         </div>
 
         <form id="importJobParsedForm" class="profile-form import-job-parsed-form">
@@ -920,6 +917,7 @@
             <div class="field">
               <label for="parsedSourceUrl">原职位链接（可选）</label>
               <input id="parsedSourceUrl" type="url" placeholder="https://...">
+              <div class="form-help">没有链接仍可准备材料，但无法从 Agent 打开招聘页。</div>
             </div>
           </div>
           <div class="field">
@@ -928,10 +926,9 @@
           </div>
           <div class="form-actions">
             <button id="cancelImportJobButton" class="action-button ghost" type="button">取消</button>
-            <button id="submitImportJob" class="action-button" type="submit">💾 确认并录入岗位库</button>
+            <button id="submitImportJob" class="action-button" type="submit">保存岗位</button>
           </div>
         </form>
-        <p class="secret-note" style="margin-top: 12px;">💡 提示：在 <code>src/job_agent/extension</code> 目录下附带了免审核 Chrome/Edge 浏览器扩展，在 Boss直聘浏览时可直接一键导入，免去手动复制。</p>
       </div>
     </dialog>
 
@@ -962,27 +959,62 @@
       </div>
     </dialog>
 
+    <dialog id="reviewDialog" class="profile-dialog review-dialog" aria-labelledby="reviewDialogTitle">
+      <div class="dialog-head">
+        <div>
+          <h2 id="reviewDialogTitle" class="dialog-title">审阅并打开招聘页</h2>
+          <p id="reviewDialogCopy" class="dialog-copy">在同一面板核对 PDF 简历与打招呼语。确认后打开招聘页，并在资源管理器中定位简历。</p>
+        </div>
+        <button id="closeReviewButton" class="dialog-close" type="button">关闭</button>
+      </div>
+      <div class="dialog-body review-body">
+        <div class="review-pdf-container">
+          <div class="review-pdf-help"><span>请核对姓名、联系方式和经历。联系方式有误时，请先在个人资料中修正，再重新准备。预览未显示或字太小？</span> <a id="reviewPdfLink" target="_blank" rel="noopener" hidden>单独打开当前 PDF</a></div>
+          <iframe id="reviewPdfFrame" class="review-pdf-frame" title="岗位专属简历预览"></iframe>
+        </div>
+        <div class="review-sidebar">
+          <section id="reviewFactSection" class="review-fact-section" aria-label="云端改写事实核对" hidden>
+            <h4 class="form-section-title">先核对事实，再确认版面</h4>
+            <p class="quiet">以下是已确认的原句与云端改写。引用事实编号不代表改写内容已真实；请逐项核对成果、职责与措辞。</p>
+            <div id="reviewFactList" class="review-fact-list"></div>
+            <label class="checkbox-row"><input id="reviewFactConfirm" type="checkbox">我已逐项核对以上原句和当前 PDF 中的改写，确认没有新增或夸大事实。</label>
+          </section>
+          <div class="review-section">
+            <h4 class="form-section-title">💬 岗位专属打招呼语</h4>
+            <div id="reviewGreetingsList" class="review-greetings-list">
+              <p class="quiet">正在读取招呼语…</p>
+            </div>
+          </div>
+          <div class="review-actions">
+            <button id="reviewOpenPageBtn" class="action-button primary" type="button">🚀 确认并打开招聘页</button>
+            <button id="reviewRevealBtn" class="action-button secondary" type="button">📁 打开简历所在文件夹</button>
+            <button id="reviewMarkAppliedBtn" class="action-button ghost" type="button">✅ 手动标记为已投递</button>
+          </div>
+          <p class="secret-note">⚠️ 提醒：系统不会自动在招聘平台完成投递，也不会自动标记为已投递。最终提交由你确认。</p>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="browserUseDialog" class="profile-dialog browser-use-dialog" aria-labelledby="browserUseDialogTitle">
       <div class="dialog-head">
         <div>
           <h2 id="browserUseDialogTitle" class="dialog-title">投递辅助</h2>
-          <p class="dialog-copy">使用当前用户已核验档案辅助准备表单；登录、验证码与最终提交由本人完成。</p>
+          <p class="dialog-copy">核对档案信息，预览投递所需字段；最终操作由本人在招聘网站完成。</p>
         </div>
         <button id="closeBrowserUseButton" class="dialog-close" type="button">关闭</button>
       </div>
       <div id="browserUseBody" class="dialog-body browser-use-body">
-        <section class="fill-mode-guide" aria-label="两种辅助方式">
-          <h3>选择辅助方式</h3>
-          <p><strong>伴侣扩展：</strong>在已登录的招聘页打开插件，填写岗位编号，预览字段后确认填入。不需要调试端口。</p>
-          <p><strong>实验性浏览器辅助：</strong>使用下方环境检测和模拟预览。页面切换与关键操作由本人完成。</p>
+        <section class="fill-mode-guide" aria-label="投递辅助说明">
+          <h3>先预览，再手工投递</h3>
+          <p>这里仅展示当前档案和模拟字段计划，不会打开招聘网页。请在招聘网站核对信息并自行提交。</p>
         </section>
         <div id="browserUseCdpStatus" class="cdp-status-card">
-          正在检测本地 Chrome 调试环境…
+          实站 AI 代填已暂停：第三方网页可能在输入或上传时自行提交。
         </div>
 
         <div class="hard-stop-callout">
-          <span class="callout-badge">🔴 铁律安全红线 (Hard Stop)</span>
-          <p class="callout-text">工具不点击提交、登录或验证码按钮。扩展静默填写，不触发输入事件；部分表单需本人重新输入。无法保证第三方网站没有自身副作用，异常时请停用。附件由本人上传，核对后手工提交。</p>
+          <span class="callout-badge">你的操作边界</span>
+          <p class="callout-text">登录、验证码、上传附件与最终投递由本人在招聘网站完成。模拟预览不会连接网站或发送 AI 请求。</p>
         </div>
 
         <div id="browserUseFactsPreview" class="facts-preview-card">
@@ -999,65 +1031,17 @@
           <p id="buFactsStatus" role="status"></p>
         </div>
 
-        <div id="browserUseSmsSection" class="sms-sync-card">
-          <div class="sms-card-head">
-            <h4 class="sms-card-title">验证码输入与短信同步</h4>
-            <span id="smsCurrentBadge" class="badge">未接收</span>
-          </div>
-
-          <div id="smsLatestDisplay" class="sms-latest-display">
-            暂无最新验证码。验证码仅在本机显示，须由本人确认并填写。
-          </div>
-
-          <div class="sms-manual-bar">
-            <label for="smsManualInput">短信验证码</label>
-            <input type="text" id="smsManualInput" class="sms-manual-input" inputmode="numeric" autocomplete="off" placeholder="4–6 位数字" maxlength="6" />
-            <button type="button" id="smsPasteCode" class="action-button secondary">粘贴验证码</button>
-          </div>
-          <div class="sms-target-field">
-            <label for="smsFillTarget">录入到哪里</label>
-            <select id="smsFillTarget"><option value="">仅存本机，由我手工填写</option></select>
-            <button type="button" id="smsRefreshTargets" class="action-button secondary">刷新连接</button>
-          </div>
-          <details class="sms-keypad-disclosure"><summary>打开数字键盘</summary>
-            <div id="smsKeypad" class="sms-keypad" role="group" aria-label="验证码数字键盘">
-              <button type="button" data-code-key="1">1</button><button type="button" data-code-key="2">2</button><button type="button" data-code-key="3">3</button>
-              <button type="button" data-code-key="4">4</button><button type="button" data-code-key="5">5</button><button type="button" data-code-key="6">6</button>
-              <button type="button" data-code-key="7">7</button><button type="button" data-code-key="8">8</button><button type="button" data-code-key="9">9</button>
-              <button type="button" data-code-key="clear">清空</button><button type="button" data-code-key="0">0</button><button type="button" data-code-key="backspace">退格</button>
-            </div>
-          </details>
-          <button type="button" id="smsManualSubmit" class="action-button sms-submit">核对并录入验证码</button>
-          <p id="smsManualStatus" role="status" aria-live="polite"></p>
-
-          <details class="sms-guide-details">
-            <summary class="sms-guide-summary">📖 如何在 iPhone 设置自动转发验证码？（只需配一次）</summary>
-            <div class="sms-guide-content">
-              <ol class="sms-guide-steps">
-                <li>打开 iPhone <strong>「快捷指令」</strong> App &rarr; 底部<strong>「自动化」</strong> &rarr; 点击右上角 <strong>「＋」</strong></li>
-                <li>选择 <strong>「信息」</strong>：包含填 <code>验证码</code>，勾选 <strong>「立即运行」</strong>，关闭“运行时通知”</li>
-                <li>添加操作：搜索 <strong>「获取 URL 内容」</strong>，URL 填下方链接，方法选 <strong>POST</strong>，请求体选<strong>表单</strong>或 <strong>JSON</strong>，键名 <code>message</code>，值选 <strong>快捷指令输入</strong></li>
-              </ol>
-              <div class="sms-webhook-box">
-                <code id="smsWebhookUrlDisplay" class="sms-webhook-code">打开弹窗后读取安全链接</code>
-                <button type="button" id="btnCopySmsWebhook" class="action-button secondary compact">复制链接</button>
-              </div>
-              <p class="secret-note">仅在可信局域网使用：链接含通信密钥，短信与密钥通过 HTTP 传输。不要分享链接；推荐仅转发所需招聘平台的短信。</p>
-            </div>
-          </details>
-        </div>
-
         <div class="browser-use-actions">
           <button id="browserUseDryRunBtn" class="action-button secondary flex-1" type="button">
-            🔍 模拟预览 (Dry Run)
+            预览待填字段
           </button>
-          <button id="browserUseRunBtn" class="action-button primary flex-1" type="button">
-            🚀 启动 AI 代填表单
+          <button id="browserUseRunBtn" class="action-button primary flex-1" type="button" disabled aria-disabled="true">
+            实站代填暂未开放
           </button>
         </div>
 
         <div id="browserUseLogSection" class="browser-use-log-section" style="display: none;">
-          <h4 class="log-title">执行记录与审计轨迹：</h4>
+          <h4 class="log-title">预览结果</h4>
           <div id="browserUseLogContent" class="browser-use-log-content"></div>
         </div>
       </div>
@@ -1081,7 +1065,7 @@
   </main>
 
   <!-- Google Gemini Left Drawer (Screenshot 5) -->
-  <aside id="geminiDrawer" class="gemini-drawer" aria-hidden="true">
+  <aside id="geminiDrawer" class="gemini-drawer" role="dialog" aria-label="侧边导航" aria-modal="true" aria-hidden="true">
     <div class="gemini-drawer-backdrop" id="geminiDrawerBackdrop"></div>
     <div class="gemini-drawer-sheet">
       <div class="gemini-drawer-head">
@@ -1102,23 +1086,22 @@
           </button>
           <button class="drawer-nav-item" type="button" data-drawer-nav="workspace">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-            <span>职位工作台 (双屏改写)</span>
+            <span>我的岗位</span>
           </button>
           <button class="drawer-nav-item" type="button" data-drawer-nav="tracking">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
-            <span>投递跟进看板与 OA 日历</span>
+            <span>投递进度</span>
           </button>
+          <details class="drawer-tools"><summary>更多工具</summary>
           <button class="drawer-nav-item" type="button" data-drawer-nav="interview">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
             <span>岗位面试准备</span>
           </button>
-          <button class="drawer-nav-item" type="button" data-drawer-nav="extension">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>
-            <span>录入岗位与准备材料</span>
-          </button>
+          <button class="drawer-nav-item" type="button" data-drawer-nav="help">使用指南</button>
+          </details>
           <button class="drawer-nav-item" type="button" data-drawer-nav="import">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>智能录入新岗位</span>
+            <span>添加岗位</span>
           </button>
         </nav>
         <div class="gemini-drawer-section-title">当前岗位快捷入口</div>
@@ -1127,13 +1110,13 @@
         </div>
       </div>
       <div class="gemini-drawer-footer">
-        <div class="drawer-user-card" id="drawerUserProfileBtn">
+        <button class="drawer-user-card" id="drawerUserProfileBtn" type="button">
           
           <div class="drawer-user-info">
             <div class="drawer-user-name" id="drawerUserName">个人资料</div>
             <div class="drawer-user-sub">资料与偏好</div>
           </div>
-        </div>
+        </button>
         <button id="drawerSettingsBtn" class="gemini-icon-circle" type="button" aria-label="系统设置" title="系统设置">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>

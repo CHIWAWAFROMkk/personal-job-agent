@@ -25,9 +25,6 @@ def _detect_project_root() -> Path:
     return module_root
 
 
-PROJECT_ROOT = _detect_project_root()
-
-
 def _load_dotenv(project_root: Path) -> None:
     try:
         from dotenv import load_dotenv

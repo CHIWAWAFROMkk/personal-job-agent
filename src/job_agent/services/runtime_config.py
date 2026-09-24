@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -139,6 +141,7 @@ class RuntimeConfig(StrictModel):
     ai: AIConnectorConfig = Field(default_factory=AIConnectorConfig)
     search: SearchConnectorConfig = Field(default_factory=SearchConnectorConfig)
     maps: MapConnectorConfig = Field(default_factory=MapConnectorConfig)
+    saved_keys: dict[str, str] = Field(default_factory=dict, repr=False)
 
 
 class RuntimeConfigUpdate(StrictModel):
@@ -179,35 +182,75 @@ def save_runtime_config(config: RuntimeConfig, path: Path) -> Path:
         raise RuntimeConfigError(f"本地 API 配置无法保存: {exc}") from exc
 
 
+def _ai_key_slot(provider: AIProviderId, base_url: str | None) -> str:
+    if provider in {"openai_compatible", "deepseek"}:
+        return f"ai:{provider}:{base_url or ''}"
+    return f"ai:{provider}"
+
+
+def _select_key(
+    saved_keys: dict[str, str],
+    *,
+    previous_slot: str,
+    previous_key: str,
+    selected_slot: str,
+    supplied_key: str,
+    clear: bool,
+) -> str:
+    if previous_key:
+        saved_keys[previous_slot] = previous_key
+    if clear:
+        saved_keys.pop(selected_slot, None)
+        return ""
+    if supplied_key:
+        saved_keys[selected_slot] = supplied_key
+        return supplied_key
+    return saved_keys.get(selected_slot, "")
+
+
 def update_runtime_config(path: Path, update: RuntimeConfigUpdate) -> RuntimeConfig:
     existing = load_runtime_config(path)
-    ai_key = update.ai_api_key
-    if not ai_key and not update.clear_ai_api_key and existing.ai.provider == update.ai_provider:
-        ai_key = existing.ai.api_key
-    search_key = update.search_api_key
-    if (
-        not search_key
-        and not update.clear_search_api_key
-        and existing.search.provider == update.search_provider
-    ):
-        search_key = existing.search.api_key
-    map_key = update.map_api_key
-    if (
-        not map_key
-        and not update.clear_map_api_key
-        and existing.maps.provider == update.map_provider
-    ):
-        map_key = existing.maps.api_key
-    config = RuntimeConfig(
-        ai=AIConnectorConfig(
-            provider=update.ai_provider,
-            model=update.ai_model or (
-                "local-explainable-v1" if update.ai_provider == "local" else ""
-            ),
-            base_url=update.ai_base_url,
-            api_key=ai_key,
-            monthly_quota=update.ai_monthly_quota,
+    saved_keys = dict(existing.saved_keys)
+    ai_settings = AIConnectorConfig(
+        provider=update.ai_provider,
+        model=update.ai_model or (
+            "local-explainable-v1" if update.ai_provider == "local" else ""
         ),
+        base_url=update.ai_base_url,
+        monthly_quota=update.ai_monthly_quota,
+    )
+    if existing.ai.api_key:
+        saved_keys[_ai_key_slot(existing.ai.provider, existing.ai.base_url)] = existing.ai.api_key
+    ai_key = (
+        _select_key(
+            saved_keys,
+            previous_slot=_ai_key_slot(existing.ai.provider, existing.ai.base_url),
+            previous_key=existing.ai.api_key,
+            selected_slot=_ai_key_slot(ai_settings.provider, ai_settings.base_url),
+            supplied_key=update.ai_api_key,
+            clear=update.clear_ai_api_key,
+        )
+        if ai_settings.provider not in {"local", "codex"}
+        else ""
+    )
+    search_key = _select_key(
+        saved_keys,
+        previous_slot=f"search:{existing.search.provider}",
+        previous_key=existing.search.api_key,
+        selected_slot=f"search:{update.search_provider}",
+        supplied_key=update.search_api_key,
+        clear=update.clear_search_api_key,
+    )
+    map_key = _select_key(
+        saved_keys,
+        previous_slot=f"maps:{existing.maps.provider}",
+        previous_key=existing.maps.api_key,
+        selected_slot=f"maps:{update.map_provider}",
+        supplied_key=update.map_api_key,
+        clear=update.clear_map_api_key,
+    )
+    config = RuntimeConfig(
+        ai=ai_settings.model_copy(update={"api_key": ai_key}),
         search=SearchConnectorConfig(
             provider=update.search_provider,
             api_key=search_key,
@@ -218,6 +261,7 @@ def update_runtime_config(path: Path, update: RuntimeConfigUpdate) -> RuntimeCon
             api_key=map_key,
             monthly_quota=update.map_monthly_quota,
         ),
+        saved_keys=saved_keys,
     )
     save_runtime_config(config, path)
     return config
@@ -311,6 +355,13 @@ def effective_runtime_config(path: Path) -> tuple[RuntimeConfig, str]:
     )
 
 
+@lru_cache(maxsize=2)
+def _codex_ready_for_window(window: int) -> bool:
+    from job_agent.services.codex_bridge import find_codex_executable
+
+    return find_codex_executable() is not None
+
+
 def public_runtime_config(
     path: Path,
     *,
@@ -325,8 +376,7 @@ def public_runtime_config(
     }
     ai_ready = config.ai.provider == "local" or bool(config.ai.api_key) or local_compatible
     if config.ai.provider == "codex":
-        from job_agent.services.codex_bridge import find_codex_executable
-        ai_ready = find_codex_executable() is not None
+        ai_ready = _codex_ready_for_window(int(time.monotonic() // 45))
     search_enabled = config.search.provider != "none"
     maps_enabled = config.maps.provider != "none"
     public: dict[str, object] = {
@@ -355,7 +405,7 @@ def public_runtime_config(
             "monthly_quota": config.maps.monthly_quota,
         },
         "supported": {
-            "ai": ["local", "codex", "openai", "openai_compatible"],
+            "ai": ["local", "codex", "openai", "openai_compatible", "deepseek"],
             "search": ["none", "bocha", "brave"],
             "maps": ["none", "amap"],
         },

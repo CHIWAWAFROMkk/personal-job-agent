@@ -1,5 +1,5 @@
 import { fetchLocal, readApiResponse } from './api.js';
-import { escapeHtml as esc, safeExternalUrl } from './utils.js';
+import { escapeHtml as esc, safeExternalUrl, formatDateTime, localDateTimeInput, localDateTimeIso } from './utils.js';
 import { statusLabels } from './labels.js';
 
 export function countdown(at, now = Date.now()) {
@@ -15,11 +15,6 @@ const groups = [
   ['面试', ['interview_1', 'interview_2', 'final_interview']], ['已结束', ['offer', 'rejected', 'withdrawn']],
 ];
 const statuses = [['oa_pending', '测评'], ['written_test', '笔试'], ['interview_scheduled', '一面邀请'], ['interview_2', '二面邀请'], ['final_interview', '终面邀请'], ['rejected', '明确拒绝'], ['offered', '收到 Offer']];
-const shanghaiTime = at => new Intl.DateTimeFormat('zh-CN', {timeZone:'Asia/Shanghai', month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(at));
-function inputTime(at) {
-  if (!at || !Number.isFinite(Date.parse(at))) return '';
-  return new Date(Date.parse(at) + 8 * 3600000).toISOString().slice(0, 16);
-}
 
 export function createTracking({ token, openJob, changed }) {
   const $ = id => document.getElementById(id);
@@ -29,7 +24,7 @@ export function createTracking({ token, openJob, changed }) {
   $('overviewPanel').querySelector('.overview-head').after(host);
   const dialog = document.createElement('dialog');
   dialog.id = 'trackingDrawer'; dialog.className = 'tracking-drawer'; dialog.setAttribute('aria-labelledby','trackingTitle');
-  dialog.innerHTML = `<form id="trackingForm"><header><div><h2 id="trackingTitle">粘贴通知快速登记</h2><p>仅在本机识别，不上传邮件或短信。</p></div><button type="button" class="action-button secondary" id="trackingClose">关闭</button></header><div class="tracking-drawer-body"><label for="trackingMessage">通知原文</label><textarea id="trackingMessage" maxlength="20000" rows="5" placeholder="粘贴测评或面试邀请；原文不会被保存。"></textarea><button type="button" class="action-button secondary" id="trackingParse">本地识别</button><p id="trackingParseStatus" role="status"></p><section id="trackingReview" hidden><p id="trackingCompany" class="tracking-detected"></p><ul id="trackingWarnings"></ul><label for="trackingJob">归属岗位（必须本人选择）</label><select id="trackingJob" required></select><label for="trackingStatus">核对状态</label><select id="trackingStatus" required><option value="">请选择状态</option>${statuses.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select><label class="tracking-check"><input id="trackingSchedule" type="checkbox">同时登记日程</label><div id="trackingScheduleFields" hidden><label for="trackingKind">日程类型</label><select id="trackingKind"><option value="oa">测评截止</option><option value="interview">面试开始</option></select><label for="trackingAt">日期与时间（北京时间 UTC+8）</label><input type="datetime-local" id="trackingAt"><label for="trackingUrl">测评 / 会议链接（可选）</label><input id="trackingUrl" type="url" maxlength="2048" placeholder="https://"><p>链接未经真实性验证；打开前请核对发件人及域名。</p></div><label class="tracking-check"><input id="trackingConfirmed" type="checkbox" required>我已核对岗位、状态与时间，确认写入记录。</label><button id="trackingApply" type="submit" class="action-button">确认登记</button></section></div></form>`;
+  dialog.innerHTML = `<form id="trackingForm"><header><div><h2 id="trackingTitle">粘贴通知快速登记</h2><p>仅在本机识别，不上传邮件或短信。</p></div><button type="button" class="action-button secondary" id="trackingClose">关闭</button></header><div class="tracking-drawer-body"><label for="trackingMessage">通知原文</label><textarea id="trackingMessage" maxlength="20000" rows="5" placeholder="粘贴测评或面试邀请；原文不会被保存。"></textarea><button type="button" class="action-button secondary" id="trackingParse">本地识别</button><p id="trackingParseStatus" role="status"></p><section id="trackingReview" hidden><p id="trackingCompany" class="tracking-detected"></p><ul id="trackingWarnings"></ul><label for="trackingJob">归属岗位（必须本人选择）</label><select id="trackingJob" required></select><label for="trackingStatus">核对状态</label><select id="trackingStatus" required><option value="">请选择状态</option>${statuses.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select><label class="tracking-check"><input id="trackingSchedule" type="checkbox">同时登记日程</label><div id="trackingScheduleFields" hidden><label for="trackingKind">日程类型</label><select id="trackingKind"><option value="oa">测评截止</option><option value="interview">面试开始</option></select><label for="trackingAt">日期与时间（本机时间）</label><input type="datetime-local" id="trackingAt"><p>按本机时区显示，请与通知原文核对。</p><label for="trackingUrl">测评 / 会议链接（可选）</label><input id="trackingUrl" type="url" maxlength="2048" placeholder="https://"><p>链接未经真实性验证；打开前请核对发件人及域名。</p></div><label class="tracking-check"><input id="trackingConfirmed" type="checkbox" required>我已核对岗位、状态与时间，确认写入记录。</label><button id="trackingApply" type="submit" class="action-button">确认登记</button></section></div></form>`;
   document.body.append(dialog);
   let board = {jobs:[],reminders:[]}, generation = 0, readVersion = 0, requestId = '', lastPayload = '', busy = false;
   const notice = text => { $('trackingNotice').textContent = text; };
@@ -37,7 +32,7 @@ export function createTracking({ token, openJob, changed }) {
   const api = async (path, data) => readApiResponse(await fetchLocal(path, {method:data === undefined ? 'GET' : 'POST', headers:headers(), cache:'no-store', timeoutMs:15000, ...(data === undefined ? {} : {body:JSON.stringify(data)})}));
   function reminder(item) {
     const url = safeExternalUrl(item.url);
-    return `<article class="tracking-event"><div><strong>${esc(item.company)} · ${item.kind === 'oa' ? '测评截止' : '面试开始'}</strong><p>${esc(item.title)}</p><time datetime="${esc(item.at)}">${esc(shanghaiTime(item.at))} 北京时间</time><span class="tracking-pill">${esc(countdown(item.at))}</span></div><div class="tracking-actions">${url ? `<a class="action-button secondary" href="${esc(url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">打开${item.kind === 'oa' ? '测评' : '会议'}</a>` : ''}<button type="button" class="action-button secondary" data-complete="${Number(item.id)}">标记完成</button></div></article>`;
+    return `<article class="tracking-event"><div><strong>${esc(item.company)} · ${item.kind === 'oa' ? '测评截止' : '面试开始'}</strong><p>${esc(item.title)}</p><time datetime="${esc(item.at)}">${esc(formatDateTime(item.at))} 本机时间</time><span class="tracking-pill">${esc(countdown(item.at))}</span></div><div class="tracking-actions">${url ? `<a class="action-button secondary" href="${esc(url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">打开${item.kind === 'oa' ? '测评' : '会议'}</a>` : ''}<button type="button" class="action-button secondary" data-complete="${Number(item.id)}">标记完成</button></div></article>`;
   }
   function render() {
     const active = board.reminders.filter(r=>!r.completed);
@@ -77,7 +72,7 @@ export function createTracking({ token, openJob, changed }) {
       for(const j of board.jobs) $('trackingJob').add(new Option(`${j.company} · ${j.title} (#${j.job_id})`,j.job_id));
       $('trackingStatus').value=result.status || '';
       $('trackingKind').value=result.event?.kind || 'oa';
-      $('trackingAt').value=inputTime(result.event?.at);
+      $('trackingAt').value=localDateTimeInput(result.event?.at);
       $('trackingUrl').value=result.event?.url || '';
       $('trackingSchedule').checked=Boolean(result.event);
       $('trackingSchedule').onchange();
@@ -89,7 +84,11 @@ export function createTracking({ token, openJob, changed }) {
   $('trackingForm').onsubmit=async event=>{
     event.preventDefault(); if(busy || $('trackingReview').hidden) return;
     const payload={confirmed:$('trackingConfirmed').checked,job_id:Number($('trackingJob').value),status:$('trackingStatus').value};
-    if($('trackingSchedule').checked) payload.event={kind:$('trackingKind').value,at:`${$('trackingAt').value}:00+08:00`,url:$('trackingUrl').value.trim() || null};
+    if($('trackingSchedule').checked) {
+      const at = localDateTimeIso($('trackingAt').value);
+      if (!at) { $('trackingParseStatus').textContent='请核对日程时间；本机时区中的这个时间可能不存在，或因夏令时重复。'; $('trackingAt').focus(); return; }
+      payload.event={kind:$('trackingKind').value,at,url:$('trackingUrl').value.trim() || null};
+    }
     const serialized=JSON.stringify(payload); if(lastPayload!==serialized) {lastPayload=serialized;requestId=crypto.randomUUID();}
     busy=true; $('trackingApply').disabled=true; const epoch=generation;
     try {

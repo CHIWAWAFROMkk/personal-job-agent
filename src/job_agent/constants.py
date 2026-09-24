@@ -1,6 +1,6 @@
 # Database Schema Constants
-SCHEMA_VERSION = "5"
-COMPATIBLE_SCHEMA_VERSIONS = {"1", "2", "3", "4", SCHEMA_VERSION}
+SCHEMA_VERSION = "6"
+COMPATIBLE_SCHEMA_VERSIONS = {"1", "2", "3", "4", "5", SCHEMA_VERSION}
 
 # Dictionary & Parsing Constants
 COMPANY_SUFFIXES = (
@@ -104,4 +104,15 @@ MEANINGFUL_FEEDBACK_STATUSES = POSITIVE_FEEDBACK_STATUSES | {"rejected"}
 # Configuration & Limits Constants
 DASHBOARD_VERSION = "phase13-dual-track-workshop-v1"
 MAX_JSON_BODY = 16 * 1024
+MAX_RESUME_CONTENT_BODY = 128 * 1024
 MAX_UPLOAD_BODY = 12 * 1024 * 1024
+
+
+class ExitCode:
+    """Semantic CLI exit codes adhering to BSD sysexits conventions."""
+
+    OK = 0
+    ERROR = 1
+    DATA_ERR = 65  # 数据格式错误 / 校验失败 / 解析失败
+    UNAVAILABLE = 69  # 外部网络 / API Provider / 浏览器组件不可用
+    CONFIG = 78  # 缺少 Profile / 缺少配置 / 文件未找到

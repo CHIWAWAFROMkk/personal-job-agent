@@ -1,7 +1,6 @@
 /* Isolated-world helper. No token, network, clipboard, submit or button-click capabilities. */
 (() => {
   if (globalThis.PjaFill) return;
-  let target = null, timer = null, expires = 0, armedUrl = "";
   const allowedTypes = new Set(["text", "email", "tel", "search", ""]);
   const blocked = /验证码|校验码|captcha|verification|one.time|otp|薪资|工资|salary|期望|expected|地址|住址|address|地点|城市|city|location|调剂|性别|gender|政治|身份证|id.card|密码|password|紧急|emergency|推荐人|referr|导师|父亲|母亲|监护|guardian/i;
   const aliases = {
@@ -71,46 +70,5 @@
     }
     return {filled, skipped, message: "静默预填已结束。请本人核对、手动上传附件与提交；部分网站需手动重输才会识别。"};
   }
-  function otpEligible(el) {
-    if (!editable(el) || el.tagName !== "INPUT") return false;
-    const names = labels(el).join(" ");
-    const hints = [names, el.name || "", el.id || "", el.getAttribute("placeholder") || ""].join(" ");
-    if (/图形|图片|滑块|拼图|captcha/i.test(hints)) return false;
-    return (el.getAttribute("autocomplete") === "one-time-code" || /短信验证码|手机验证码|sms\s*(?:verification\s*)?code/i.test(names)) && (el.maxLength < 0 || el.maxLength >= 4);
-  }
-  function stop() {
-    if (timer) clearInterval(timer);
-    timer = null; target = null;
-  }
-  function arm() {
-    stop();
-    const el = document.activeElement;
-    if (!otpEligible(el)) throw new Error("先在网页聚焦一个空的短信验证码输入框，再打开扩展；不支持图形验证或分格输入");
-    target = el; armedUrl = location.href;
-    return {ready: true};
-  }
-  async function tick() {
-    if (!target || location.href !== armedUrl || Date.now() >= expires || !otpEligible(target)) {
-      stop(); await chrome.runtime.sendMessage({action: "CLOSE_BOUND_CODE"}).catch(() => {}); return;
-    }
-    try {
-      const result = await chrome.runtime.sendMessage({action: "POLL_BOUND_CODE"});
-      if (result?.error || result?.closed) { stop(); return; }
-      if (result?.code) {
-        if (!/^\d{4,6}$/.test(result.code) || location.href !== armedUrl || !otpEligible(target) || (target.maxLength > 0 && result.code.length > target.maxLength)) { stop(); return; }
-        // No events: frameworks may require the user to type/edit once before proceeding.
-        setValue(target, result.code);
-        target.setAttribute("title", "验证码已填入。请本人核对；未触发输入事件或提交。必要时手动重新输入。");
-        stop();
-      }
-    } catch { stop(); }
-  }
-  function start() {
-    if (!target || !otpEligible(target) || location.href !== armedUrl) throw new Error("验证码输入框已变化，请重新选择");
-    expires = Date.now() + 120000;
-    let pending = false;
-    timer = setInterval(async () => { if (pending) return; pending = true; try { await tick(); } finally { pending = false; } }, 1000);
-    return {waiting: true};
-  }
-  globalThis.PjaFill = Object.freeze({labels, visible, editable, fieldKey, plan, fill, otpEligible, arm, start, stop, tick});
+  globalThis.PjaFill = Object.freeze({labels, visible, editable, fieldKey, plan, fill});
 })();

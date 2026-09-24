@@ -14,7 +14,9 @@ def _run(handler, callback):
         handler._reject_unauthorized_action()
         return
     try:
-        result = callback(MockInterviewStore(handler.repository.path))
+        result = callback(MockInterviewStore(
+            handler.repository.path, usage_path=handler.api_usage_path,
+        ))
     except InterviewConflict as exc:
         handler._json({'error': str(exc)}, 409)
         return

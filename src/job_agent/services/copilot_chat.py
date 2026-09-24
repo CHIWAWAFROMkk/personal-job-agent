@@ -5,6 +5,7 @@ import re
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Callable
 
 from job_agent.models.copilot import (
     CopilotAction,
@@ -12,7 +13,9 @@ from job_agent.models.copilot import (
     CopilotSnapshot,
     CopilotThread,
 )
-from job_agent.services.api_usage import load_api_usage, record_api_usage
+from job_agent.services.api_usage import (
+    ApiQuotaExceededError, ApiUsageUnavailableError, reserve_api_usage,
+)
 from job_agent.services.job_repository import JobRepository
 from job_agent.services.profile_store import load_profile, write_json_atomic
 from job_agent.services.runtime_config import RuntimeConfig, effective_runtime_config
@@ -20,6 +23,9 @@ from job_agent.services.runtime_config import RuntimeConfig, effective_runtime_c
 
 class CopilotChatError(RuntimeError):
     pass
+
+
+COPILOT_AI_TIMEOUT_SECONDS = 45
 
 
 _SUGGESTIONS = [
@@ -500,6 +506,8 @@ def _cloud_reply(
     thread: CopilotThread,
     message: str,
     context: dict[str, object],
+    *,
+    request_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> tuple[str, int, int]:
     try:
         from openai import OpenAI
@@ -517,14 +525,19 @@ def _cloud_reply(
         {"workspace_context": context, "user_message": message},
         ensure_ascii=False,
     )
+    invoke = request_call or (lambda call: call())
     if config.ai.provider == "codex":
         from job_agent.services.codex_bridge import codex_completion
-        return codex_completion(_SYSTEM_PROMPT, json.dumps({"history": history,
-            "current": json.loads(user_payload)}, ensure_ascii=False), model=config.ai.model)
+        return invoke(lambda: codex_completion(_SYSTEM_PROMPT, json.dumps({"history": history,
+            "current": json.loads(user_payload)}, ensure_ascii=False), model=config.ai.model))
     if config.ai.provider == "openai":
         if not config.ai.api_key:
             raise CopilotChatError("OpenAI API Key 尚未配置。")
-        response = OpenAI(api_key=config.ai.api_key).responses.create(
+        response = invoke(lambda: OpenAI(
+            api_key=config.ai.api_key,
+            timeout=COPILOT_AI_TIMEOUT_SECONDS,
+            max_retries=0,
+        ).responses.create(
             model=config.ai.model,
             store=False,
             input=[
@@ -533,14 +546,16 @@ def _cloud_reply(
                 {"role": "user", "content": user_payload},
             ],
             max_output_tokens=900,
-        )
+        ))
         content = (getattr(response, "output_text", "") or "").strip()
     elif config.ai.provider == "deepseek":
         if not config.ai.api_key:
             raise CopilotChatError("DeepSeek API Key 尚未配置。")
-        response = OpenAI(
+        response = invoke(lambda: OpenAI(
             api_key=config.ai.api_key,
             base_url=config.ai.base_url or "https://api.deepseek.com",
+            timeout=COPILOT_AI_TIMEOUT_SECONDS,
+            max_retries=0,
         ).chat.completions.create(
             model=config.ai.model or "deepseek-chat",
             messages=[
@@ -549,14 +564,16 @@ def _cloud_reply(
                 {"role": "user", "content": user_payload},
             ],
             temperature=0.3,
-        )
+        ))
         content = (response.choices[0].message.content or "").strip()
     elif config.ai.provider == "openai_compatible":
         if not config.ai.base_url:
             raise CopilotChatError("OpenAI 兼容 API 地址尚未配置。")
-        response = OpenAI(
+        response = invoke(lambda: OpenAI(
             api_key=config.ai.api_key or "local-api-no-key",
             base_url=config.ai.base_url,
+            timeout=COPILOT_AI_TIMEOUT_SECONDS,
+            max_retries=0,
         ).chat.completions.create(
             model=config.ai.model,
             messages=[
@@ -565,7 +582,7 @@ def _cloud_reply(
                 {"role": "user", "content": user_payload},
             ],
             temperature=0.2,
-        )
+        ))
         content = (response.choices[0].message.content or "").strip()
     else:
         raise CopilotChatError("当前使用本地对话模式。")
@@ -573,15 +590,6 @@ def _cloud_reply(
         raise CopilotChatError("AI 未返回可用回答。")
     input_tokens, output_tokens = _usage_tokens(response)
     return content, input_tokens, output_tokens
-
-
-def _cloud_allowed(config: RuntimeConfig, usage_path: Path) -> bool:
-    if config.ai.provider == "local":
-        return False
-    if config.ai.monthly_quota is None:
-        return True
-    usage = load_api_usage(usage_path)
-    return usage.ai.successful_requests < config.ai.monthly_quota
 
 
 def copilot_snapshot(
@@ -658,14 +666,22 @@ def respond_to_copilot(
     config, _ = effective_runtime_config(runtime_config_path)
     provider = "local"
     content = local_content
-    if _cloud_allowed(config, usage_path):
+    if config.ai.provider != "local":
         try:
-            content, input_tokens, output_tokens = _cloud_reply(
-                config,
-                thread,
-                cleaned,
-                context,
-            )
+            with reserve_api_usage(
+                usage_path, "ai", config.ai.provider, config.ai.monthly_quota,
+            ) as usage:
+                content, input_tokens, output_tokens = _cloud_reply(
+                    config, thread, cleaned, context, request_call=usage.call,
+                )
+                if usage.active:
+                    usage.commit(input_tokens=input_tokens, output_tokens=output_tokens)
+        except ApiQuotaExceededError:
+            content = local_content + "\n\n本机 AI 月度调用上限已到，本次使用本地工作台数据回答。"
+            provider = "local_quota_fallback"
+        except ApiUsageUnavailableError:
+            content = local_content + "\n\n本机 API 用量记录无法读取，云端调用已暂停；本次使用本地工作台数据回答。"
+            provider = "local_fallback"
         except Exception:
             # Connector, network, authentication, or SDK failures must never
             # make the local job workspace unusable. Do not expose provider
@@ -674,16 +690,6 @@ def respond_to_copilot(
             provider = "local_fallback"
         else:
             provider = f"{config.ai.provider}:{config.ai.model}"
-            record_api_usage(
-                usage_path,
-                "ai",
-                config.ai.provider,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-            )
-    elif config.ai.provider != "local":
-        content = local_content + "\n\n本机 AI 月度调用上限已到，本次使用本地工作台数据回答。"
-        provider = "local_quota_fallback"
 
     thread.messages.append(
         CopilotMessage(

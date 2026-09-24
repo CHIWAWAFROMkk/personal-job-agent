@@ -5,7 +5,12 @@ import pytest
 
 from job_agent.services.tracking_parser import parse_message, safe_public_url
 
-NOW = datetime(2026, 9, 20, 10, tzinfo=timezone(timedelta(hours=8)))
+NOW = datetime(2026, 9, 20, 10).astimezone()
+
+
+def local_wall(value: str) -> str:
+    """Notification wall time is interpreted in the device's local zone."""
+    return datetime.fromisoformat(value).replace(tzinfo=None).astimezone().isoformat()
 
 
 @pytest.mark.parametrize("text,company,status,at", [
@@ -22,7 +27,7 @@ def test_notifications(text, company, status, at):
     result = parse_message(text, NOW)
     assert result["company"] == company
     assert result["status"] == status
-    assert (result["event"]["at"] if result["event"] else None) == at
+    assert (result["event"]["at"] if result["event"] else None) == (local_wall(at) if at else None)
 
 
 @pytest.mark.parametrize("text", ["如未通过面试，将发送短信。", "如果通过，将发送录用通知。", "尚未收到录用通知。", "尚未安排面试时间。", "可能邀请您参加面试。", "未完成测评不会影响申请。", "预计面试时间下周。"])
@@ -45,7 +50,7 @@ def test_ats_not_employer(sender):
 def test_signature_and_year_warning():
     result = parse_message("面试邀请：9月21日15:00\n示例科技招聘团队", NOW)
     assert result["company"] == "示例科技"
-    assert result["event"]["at"] == "2026-09-21T15:00:00+08:00"
+    assert result["event"]["at"] == local_wall("2026-09-21T15:00:00+08:00")
     assert any("年份" in s for s in result["warnings"])
 
 
@@ -56,7 +61,7 @@ def test_incomplete_invalid_date_no_invention(date):
 
 def test_deadline_preferred_to_start():
     result = parse_message("【示例科技】测评邀请。开始时间2026年9月21日10:00，截止时间2026年9月23日18:00。", NOW)
-    assert result["event"]["at"] == "2026-09-23T18:00:00+08:00"
+    assert result["event"]["at"] == local_wall("2026-09-23T18:00:00+08:00")
 
 
 def test_two_unknown_times_ambiguous():
@@ -99,8 +104,24 @@ def test_no_start_time_or_malformed_clock_as_deadline(schedule):
 
 
 def test_reference_timezone_converted_before_tomorrow():
-    result = parse_message("【示例科技】面试时间明天10:00", datetime(2026, 9, 20, 23, tzinfo=timezone.utc))
-    assert result["event"]["at"] == "2026-09-22T10:00:00+08:00"
+    reference = datetime(2026, 9, 20, 23, tzinfo=timezone.utc)
+    result = parse_message("【示例科技】面试时间明天10:00", reference)
+    local_tomorrow = (reference.astimezone() + timedelta(days=1)).date()
+    assert result["event"]["at"] == datetime(
+        local_tomorrow.year, local_tomorrow.month, local_tomorrow.day, 10,
+    ).astimezone().isoformat()
+
+
+@pytest.mark.parametrize("zone_label", ["UTC+8", "UTC+0", "UTC", "GMT", "北京时间", "中国标准时间", "东八区"])
+def test_explicit_utc_offset_requires_manual_timezone_confirmation(zone_label):
+    result = parse_message(f"【示例科技】面试时间2026年9月24日10:00 {zone_label}", NOW)
+    assert result["event"]["at"] is None
+    assert any("时区" in warning for warning in result["warnings"])
+
+
+def test_timezone_label_inside_url_is_not_a_schedule_timezone():
+    result = parse_message("【示例科技】面试时间2026年9月24日10:00。https://utc.example.com/meeting", NOW)
+    assert result["event"]["at"] == local_wall("2026-09-24T10:00:00+08:00")
 
 
 def test_code_and_calendar_url_dates_not_schedule():
@@ -110,7 +131,7 @@ def test_code_and_calendar_url_dates_not_schedule():
 
 def test_repeat_same_time_not_ambiguous():
     result = parse_message("【示例科技】面试时间2026年9月21日10:00。提醒：2026年9月21日10:00", NOW)
-    assert result["event"]["at"] == "2026-09-21T10:00:00+08:00"
+    assert result["event"]["at"] == local_wall("2026-09-21T10:00:00+08:00")
 
 
 def test_relative_date_warns_old_messages():
@@ -123,7 +144,7 @@ def test_ambiguous_morning_twelve_not_midnight():
 
 
 def test_interview_time_range_uses_start():
-    assert parse_message("面试时间9月22日14:00-15:00", NOW)["event"]["at"] == "2026-09-22T14:00:00+08:00"
+    assert parse_message("面试时间9月22日14:00-15:00", NOW)["event"]["at"] == local_wall("2026-09-22T14:00:00+08:00")
 
 
 def test_oa_open_without_deadline():

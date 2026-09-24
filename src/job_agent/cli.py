@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import importlib.util
+import logging
 import os
 import re
 import sys
@@ -10,6 +11,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
+
+from job_agent.constants import ExitCode
+from job_agent.services.logging_config import configure_logging
 
 from job_agent.models.application_tracking import ApplicationStatus
 from job_agent.models.interview_debrief import InterviewDebriefInput
@@ -23,7 +27,7 @@ from job_agent.services.application_pack import (
     resolve_resume_bundle,
     write_application_pack,
 )
-from job_agent.services.api_usage import record_api_usage
+from job_agent.services.api_usage import ApiQuotaExceededError, reserve_api_usage
 from job_agent.services.browser_assist import (
     BrowserAssistError,
     create_application_session,
@@ -47,6 +51,11 @@ from job_agent.services.job_search_provider import (
     JobSearchProviderError,
     build_job_search_provider,
 )
+from job_agent.services.job_search_intent import (
+    build_discovery_query,
+    resolve_employment_keywords,
+    resolve_graduation_cohort,
+)
 from job_agent.services.job_source_review import review_job_source
 from job_agent.services.local_matcher import match_job_locally, structure_job_locally
 from job_agent.services.profile_store import (
@@ -64,6 +73,7 @@ from job_agent.services.preparation_pack import (
 )
 from job_agent.services.resume_reader import ResumeReadError, read_resume
 from job_agent.services.resume_audit import audit_resume
+from job_agent.services.runtime_config import effective_runtime_config
 from job_agent.services.status_sync import (
     StatusSyncError,
     collect_shixiseng_statuses,
@@ -163,6 +173,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--role",
         action="append",
         help="只搜索指定岗位方向；可重复使用",
+    )
+    jobs_discover.add_argument(
+        "--cohort",
+        type=int,
+        help="指定毕业届次（如 2026、2027）；默认依据 Profile 教育经历或当前招聘日历自动推算",
+    )
+    jobs_discover.add_argument(
+        "--employment-type",
+        help="指定求职类型（实习、校招、社招）；默认读取 Profile 的求职偏好",
     )
     jobs_candidates = jobs_commands.add_parser(
         "candidates",
@@ -772,18 +791,31 @@ def _jobs_command(args: argparse.Namespace) -> int:
         created_number = 0
         successful_queries = 0
         failed_queries = 0
+        attempted_queries = 0
+        quota_blocked = False
+        runtime_config, _ = effective_runtime_config(settings.runtime_config_path)
+        usage_path = settings.private_dir / "api-usage.json"
+        cohort = args.cohort or resolve_graduation_cohort(profile)
+        emp_keywords = resolve_employment_keywords(profile, override_type=getattr(args, "employment_type", None))
+        emp_kw = emp_keywords[0] if emp_keywords else "实习"
         query_pairs = [
             (location, role)
             for location in locations
             for role in roles
         ][: args.max_queries]
         for location, role in query_pairs:
-            query = (
-                f"{location} {role} 实习 2027届 "
-                "(site:shixiseng.com OR site:nowcoder.com OR site:zhipin.com)"
-            ).strip()
+            query = build_discovery_query(location, role, cohort, emp_kw)
             try:
-                hits = provider.search(query, count=args.limit_per_query)
+                with reserve_api_usage(
+                    usage_path, "search", settings.search_provider,
+                    runtime_config.search.monthly_quota,
+                ) as usage:
+                    attempted_queries += 1
+                    hits = usage.call(lambda: provider.search(query, count=args.limit_per_query))
+            except ApiQuotaExceededError as exc:
+                print(str(exc), file=sys.stderr)
+                quota_blocked = True
+                break
             except JobSearchProviderError as exc:
                 failed_queries += 1
                 print(f"搜索方向失败（{location} / {role}）: {exc}", file=sys.stderr)
@@ -808,17 +840,10 @@ def _jobs_command(args: argparse.Namespace) -> int:
                 print(f"   {outcome.canonical_url}")
         print(f"本次发现候选链接: {hit_number}")
         print(f"其中新增候选: {created_number}")
-        print(f"本次搜索 API 尝试: {len(query_pairs)}")
+        print(f"本次搜索 API 尝试: {attempted_queries}")
         print(f"成功方向: {successful_queries}；失败方向: {failed_queries}")
-        if successful_queries:
-            record_api_usage(
-                settings.private_dir / "api-usage.json",
-                "search",
-                settings.search_provider,
-                successful_requests=successful_queries,
-            )
         print("候选尚未进入正式岗位库；需先核验仍在招聘并读取完整 JD。")
-        return 0
+        return ExitCode.UNAVAILABLE if quota_blocked else 0
     if args.jobs_command == "candidates":
         if args.limit < 1 or args.limit > 500:
             raise ValueError("--limit 必须在 1 到 500 之间。")
@@ -1557,20 +1582,20 @@ def _match(args: argparse.Namespace) -> int:
             api_key=settings.ai_api_key,
             base_url=settings.ai_base_url,
         )
-        result = provider.match_job(
-            profile,
-            raw_jd,
-            company=args.company,
-            title=args.title,
-            location=args.location,
-            source=args.source,
-            source_url=args.source_url,
-        )
-        record_api_usage(
-            settings.private_dir / "api-usage.json",
-            "ai",
-            provider_id,
-        )
+        runtime_config, _ = effective_runtime_config(settings.runtime_config_path)
+        with reserve_api_usage(
+            settings.private_dir / "api-usage.json", "ai", provider_id,
+            runtime_config.ai.monthly_quota,
+        ) as usage:
+            result = usage.call(lambda: provider.match_job(
+                profile,
+                raw_jd,
+                company=args.company,
+                title=args.title,
+                location=args.location,
+                source=args.source,
+                source_url=args.source_url,
+            ))
 
     if args.output:
         output_path = args.output.expanduser().resolve()
@@ -1598,10 +1623,24 @@ def _configure_output_encoding() -> None:
             stream.reconfigure(encoding="utf-8")
 
 
+logger = logging.getLogger(__name__)
+
+
 def main(argv: list[str] | None = None) -> None:
     _configure_output_encoding()
     parser = _build_parser()
     args = parser.parse_args(argv)
+    try:
+        settings = get_settings()
+    except Exception as exc:
+        print(f"启动失败：无法读取项目配置：{exc}", file=sys.stderr)
+        raise SystemExit(ExitCode.CONFIG) from exc
+    try:
+        configure_logging(log_dir=settings.project_root / "data" / "logs", log_file_name="agent.log")
+    except OSError as exc:
+        print(f"提示：无法创建日志文件：{exc}", file=sys.stderr)
+
+    code = ExitCode.OK
     try:
         if args.command == "doctor":
             code = _doctor()
@@ -1625,30 +1664,27 @@ def main(argv: list[str] | None = None) -> None:
                 port=args.port,
                 open_browser=not args.no_open,
             )
-            code = 0
+            code = ExitCode.OK
         else:
             parser.error("未知命令")
             return
-    except (
-        FileNotFoundError,
-        OSError,
-        ProfileStoreError,
-        ApplicationPackError,
-        PreparationPackError,
-        BrowserAssistError,
-        ContactImportError,
-        TailoredResumeError,
-        JobDatabaseError,
-        JobSearchProviderError,
-        DashboardError,
-        ResumeReadError,
-        StatusSyncError,
-        ValidationError,
-        ValueError,
-    ) as exc:
+    except (ProfileStoreError, FileNotFoundError) as exc:
+        logger.warning("Configuration or profile missing: %s", exc)
+        print(f"配置错误: {exc}", file=sys.stderr)
+        code = ExitCode.CONFIG
+    except ApiQuotaExceededError as exc:
+        print(f"额度限制: {exc}", file=sys.stderr)
+        code = ExitCode.UNAVAILABLE
+    except (ValidationError, ValueError, ResumeReadError, ContactImportError, JobDatabaseError) as exc:
+        logger.warning("Data validation or format error: %s", exc)
+        print(f"数据错误: {exc}", file=sys.stderr)
+        code = ExitCode.DATA_ERR
+    except (JobSearchProviderError, StatusSyncError, BrowserAssistError) as exc:
+        logger.warning("External service unavailable: %s", exc)
+        print(f"外部服务异常: {exc}", file=sys.stderr)
+        code = ExitCode.UNAVAILABLE
+    except (ApplicationPackError, PreparationPackError, TailoredResumeError, DashboardError, OSError, RuntimeError) as exc:
+        logger.exception("Runtime execution failed: %s", exc)
         print(f"错误: {exc}", file=sys.stderr)
-        code = 1
-    except RuntimeError as exc:
-        print(f"错误: {exc}", file=sys.stderr)
-        code = 1
+        code = ExitCode.ERROR
     raise SystemExit(code)

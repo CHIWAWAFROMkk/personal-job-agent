@@ -49,11 +49,12 @@ class HttpOriginBoundaryTests(unittest.TestCase):
     def test_valid_agent_is_limited_to_dedicated_routes(self):
         headers = {'Origin': 'chrome-extension://' + 'a' * 32,
                    'Sec-Fetch-Site': 'cross-site',
-                   'X-Agent-Token': self.server.RequestHandlerClass.agent_token}
+                   'X-Agent-Token': self.server.RequestHandlerClass.agent_token,
+                   'X-Profile-Context': self.server.RequestHandlerClass.profile_context}
         self.assertEqual(self.call('/api/agent/state', headers)[0], 200)
         self.assertEqual(self.call('/api/fill/poll', headers, {})[0], 400)
         self.assertEqual(self.call('/api/jobs/import-parsed', headers, {})[0], 400)
-        for path in ['/api/settings', '/api/agent/token', '/api/sms/setup']:
+        for path in ['/api/settings', '/api/agent/token']:
             self.assertEqual(self.call(path, {**headers, 'X-Job-Agent-Token': self.token}, {})[0], 403)
         self.assertEqual(self.call('/api/agent/state', {**headers, 'X-Agent-Token': 'bad'})[0], 403)
         self.assertEqual(self.call('/api/agent/state', {**headers, 'Origin': 'https://evil.example'})[0], 403)
@@ -86,3 +87,12 @@ class HttpOriginBoundaryTests(unittest.TestCase):
         handler.headers['Origin'] = self.base
         handler.headers['Origin'] = 'https://evil.example'
         self.assertFalse(handler._request_source_allowed('GET', '/api/dashboard'))
+
+    def test_oversized_body_without_route_error_handler_is_a_client_error(self):
+        status, body = self.call(
+            '/api/jobs/1/reveal-resume',
+            {'X-Job-Agent-Token': self.token},
+            {'padding': 'x' * 17000},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn('请求内容过大', body.decode('utf-8'))

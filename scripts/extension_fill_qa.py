@@ -1,4 +1,4 @@
-"""Real DOM field safety checks with a mocked extension transport, synthetic data."""
+"""Real DOM field safety checks using synthetic data."""
 import json
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -9,6 +9,8 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, channel='msedge')
         page = browser.new_page()
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(10000)
         page.route('https://jobs.example/**', lambda r: r.fulfill(content_type='text/html; charset=utf-8', body='''
           <form id="form"><label>姓名<input id="name"></label><label>手机<input id="phone"></label>
           <label>邮箱<input id="email" value="keep@example.com"></label>
@@ -18,7 +20,7 @@ def main():
           <script>window.submits=0;window.otpEvents=0;document.querySelector('form').onsubmit=e=>{e.preventDefault();submits++};
           document.querySelector('#otp').oninput=()=>otpEvents++;
           document.querySelector('#name').onchange=()=>document.querySelector('form').requestSubmit();
-          window.chrome={runtime:{sendMessage:async()=>({code:'004321'})}};</script>'''))
+          </script>'''))
         page.goto('https://jobs.example/apply')
         page.add_script_tag(path=str(root / 'src/job_agent/extension/fill.js'))
         result = page.evaluate("PjaFill.fill({name:'合成测试',phone:'123456',email:'replace@example.com',school:'测试大学',salary:'9999'})")
@@ -26,18 +28,14 @@ def main():
         assert page.locator('#email').input_value() == 'keep@example.com'
         assert page.locator('#salary').input_value() == ''
         assert page.locator('#school1').input_value() == ''
-        page.locator('#otp').focus()
-        page.evaluate('PjaFill.arm(); PjaFill.start()')
-        page.wait_for_function("document.querySelector('#otp').value==='004321'")
+        assert page.locator('#school2').input_value() == ''
+        assert page.locator('#otp').input_value() == ''
+        assert page.locator('#captcha').input_value() == ''
         assert page.evaluate('submits') == 0
         assert page.evaluate('otpEvents') == 0
-        page.locator('#otp').fill('')
-        page.locator('#otp').focus()
-        page.evaluate("PjaFill.arm(); PjaFill.start(); history.pushState({},'', '/other')")
-        page.wait_for_timeout(1200)
-        assert page.locator('#otp').input_value() == ''
+        assert page.evaluate("['arm','start','tick','otpEligible'].every(key => PjaFill[key] === undefined)")
         browser.close()
-    print(json.dumps({'filled': result['filled'], 'ambiguous_skipped': True, 'no_submit': True, 'otp_no_events': True, 'navigation_stops': True}))
+    print(json.dumps({'filled': result['filled'], 'ambiguous_skipped': True, 'no_submit': True, 'verification_fields_untouched': True, 'otp_api_removed': True}))
 
 
 if __name__ == '__main__':

@@ -109,7 +109,16 @@ def _git_files(root: Path) -> list[Path] | None:
     if not (root / ".git").exists():
         return None
     completed = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z"],
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
         check=False,
         capture_output=True,
     )
@@ -132,7 +141,10 @@ def _is_release_dependency(relative: Path) -> bool:
 
 def _is_forbidden_user_file(relative: Path, *, release_mode: bool) -> bool:
     normalized = relative.as_posix().lower()
-    if normalized in {".env", "profile.json", "app-settings.json"}:
+    basename = relative.name.casefold()
+    if basename in {".env", "profile.json", "app-settings.json"} or (
+        basename.startswith(".env.") and basename != ".env.example"
+    ):
         return True
     if normalized.startswith(("data/private/", "data/inbox/", "data/output/")):
         return relative.name != ".gitkeep"
@@ -231,6 +243,31 @@ def audit(
     return sorted(findings, key=lambda item: (item[1].casefold(), item[0]))
 
 
+def audit_zip(
+    zip_path: Path,
+    private_profile: Path | None,
+    *,
+    check_local_paths: bool = False,
+) -> tuple[list[tuple[str, str]], int]:
+    import tempfile
+    import zipfile
+
+    findings: list[tuple[str, str]] = []
+    total_files = 0
+    with tempfile.TemporaryDirectory(prefix="privacy-audit-zip-", ignore_cleanup_errors=True) as temp_dir:
+        extract_root = Path(temp_dir)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(extract_root)
+        total_files = sum(1 for _ in iter_files(extract_root))
+        findings = audit(
+            extract_root,
+            private_profile,
+            release_mode=True,
+            check_local_paths=check_local_paths,
+        )
+    return findings, total_files
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan a source tree or release for private material.")
     parser.add_argument("root", nargs="?", default=".")
@@ -247,10 +284,25 @@ def main() -> int:
     )
     args = parser.parse_args()
     root = Path(args.root).resolve()
-    if not root.is_dir():
-        parser.error(f"not a directory: {root}")
     if args.private_profile is not None and not args.private_profile.is_file():
         parser.error("private profile file not found")
+
+    if root.is_file() and root.suffix.lower() == ".zip":
+        findings, count = audit_zip(
+            root,
+            args.private_profile,
+            check_local_paths=args.check_local_paths,
+        )
+        if findings:
+            print(f"Privacy audit failed on zip {root.name} with {len(findings)} finding(s):", file=sys.stderr)
+            for category, path in findings:
+                print(f"- {category}: {path}", file=sys.stderr)
+            return 1
+        print(f"Privacy audit passed for zip {root.name}: {count} files checked inside archive.")
+        return 0
+
+    if not root.is_dir():
+        parser.error(f"not a directory or zip file: {root}")
 
     findings = audit(
         root,

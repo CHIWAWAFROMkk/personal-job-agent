@@ -76,7 +76,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertTrue(public_runtime_config(self.path)["ai"]["api_key_configured"])
         self.assertEqual(public_runtime_config(self.path)["search"]["monthly_quota"], 20)
 
-    def test_blank_update_preserves_key_only_for_same_provider(self) -> None:
+    def test_switching_provider_preserves_its_key_without_exposing_it(self) -> None:
         update_runtime_config(
             self.path,
             RuntimeConfigUpdate(
@@ -107,6 +107,52 @@ class RuntimeConfigTests(unittest.TestCase):
         )
         self.assertEqual(switched.ai.api_key, "")
         self.assertEqual(switched.search.api_key, "")
+        restored = update_runtime_config(
+            self.path,
+            RuntimeConfigUpdate(
+                ai_provider="openai",
+                ai_model="gpt-new",
+                search_provider="bocha",
+            ),
+        )
+        self.assertEqual(restored.ai.api_key, "openai-secret")
+        self.assertEqual(restored.search.api_key, "bocha-secret")
+        self.assertNotIn("openai-secret", json.dumps(public_runtime_config(self.path)))
+        self.assertNotIn("bocha-secret", json.dumps(public_runtime_config(self.path)))
+
+    def test_compatible_endpoint_keys_are_isolated_and_can_be_cleared(self) -> None:
+        first = RuntimeConfigUpdate(
+            ai_provider="openai_compatible",
+            ai_model="model",
+            ai_base_url="https://first.example/v1",
+            ai_api_key="first-secret",
+            search_provider="none",
+        )
+        update_runtime_config(self.path, first)
+        second = RuntimeConfigUpdate(
+            ai_provider="openai_compatible",
+            ai_model="model",
+            ai_base_url="https://second.example/v1",
+            search_provider="none",
+        )
+        self.assertEqual(update_runtime_config(self.path, second).ai.api_key, "")
+        self.assertEqual(
+            update_runtime_config(self.path, first.model_copy(update={"ai_api_key": ""})).ai.api_key,
+            "first-secret",
+        )
+        cleared = update_runtime_config(
+            self.path,
+            first.model_copy(update={"ai_api_key": "", "clear_ai_api_key": True}),
+        )
+        self.assertEqual(cleared.ai.api_key, "")
+        self.assertEqual(
+            update_runtime_config(self.path, second).ai.api_key,
+            "",
+        )
+        self.assertEqual(
+            update_runtime_config(self.path, first.model_copy(update={"ai_api_key": ""})).ai.api_key,
+            "",
+        )
 
     def test_remote_compatible_url_requires_https(self) -> None:
         with self.assertRaises(ValidationError):
@@ -131,6 +177,26 @@ class RuntimeConfigTests(unittest.TestCase):
             ),
         )
         self.assertTrue(public_runtime_config(self.path)["ai"]["ready"])
+
+    def test_codex_readiness_scan_is_cached_briefly(self) -> None:
+        update_runtime_config(
+            self.path,
+            RuntimeConfigUpdate(
+                ai_provider="codex", ai_model="codex-default", search_provider="none"
+            ),
+        )
+        with patch("job_agent.services.runtime_config.time.monotonic", side_effect=[9_000_000, 9_000_001, 9_000_046]):
+            with patch(
+                "job_agent.services.codex_bridge.find_codex_executable",
+                side_effect=[None, "codex.exe"],
+            ) as probe:
+                first = public_runtime_config(self.path)
+                second = public_runtime_config(self.path)
+                refreshed = public_runtime_config(self.path)
+        self.assertFalse(first["ai"]["ready"])
+        self.assertFalse(second["ai"]["ready"])
+        self.assertTrue(refreshed["ai"]["ready"])
+        self.assertEqual(probe.call_count, 2)
 
 
 if __name__ == "__main__":

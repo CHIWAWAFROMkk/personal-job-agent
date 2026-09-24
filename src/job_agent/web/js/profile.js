@@ -63,7 +63,7 @@ export function prefillProfileForm(activeProfile) {
     adjacentRoles: joinValues(activeProfile.adjacent_roles),
     targetIndustries: joinValues(activeProfile.target_industries),
     preferredLocations: joinValues(activeProfile.preferred_locations),
-    employmentTypes: joinValues(activeProfile.employment_types) || "实习",
+    employmentTypes: joinValues(activeProfile.employment_types),
     mustHaves: joinValues(activeProfile.must_haves),
     avoid: joinValues(activeProfile.avoid),
     earliestStart: activeProfile.earliest_start,

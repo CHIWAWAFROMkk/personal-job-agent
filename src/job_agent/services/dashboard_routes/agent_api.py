@@ -21,17 +21,6 @@ def handle_copy_agent_token(handler):
         handler._json({'agent_token': handler.agent_token})
 
 
-@route('POST', r'/api/sms/setup')
-def handle_sms_setup(handler):
-    if not _local_sensitive_action(handler):
-        return
-    from job_agent.services.sms_sync import get_sms_setup
-    try:
-        handler._json(get_sms_setup(handler.private_dir))
-    except (ValueError, OSError, RuntimeError):
-        handler._json({'error': '短信配对信息读取失败，请检查本机监听设置。'}, HTTPStatus.BAD_REQUEST)
-
-
 @route('GET', r'/api/profile')
 def handle_profile_preview(handler):
     if not _local_sensitive_action(handler):
@@ -66,6 +55,7 @@ def handle_get_agent_state(handler):
             "funnel": handler.repository.application_summary().model_dump(mode="json"),
             "service": "personal-job-agent",
             "version": _DASHBOARD_VERSION,
+            "profile_context": handler.profile_context,
         }
     except JobDatabaseError as exc:
         handler._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

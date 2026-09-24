@@ -16,6 +16,8 @@ class ProfileStoreError(RuntimeError):
 
 
 def load_profile(path: Path) -> Profile:
+    if (path.parent / "backups" / "profile-switch-pending.json").exists():
+        raise ProfileStoreError("上次切换用户尚未恢复，已暂停资料读取。请关闭并重新启动桌面程序以恢复。")
     if not path.is_file():
         raise ProfileStoreError(f"Profile 不存在: {path}")
     try:
@@ -33,6 +35,8 @@ def save_profile(
     create_backup: bool = True,
 ) -> Path:
     path = path.resolve()
+    if (path.parent / "backups" / "profile-switch-pending.json").exists():
+        raise ProfileStoreError("上次切换用户尚未恢复，已暂停资料保存。请关闭并重新启动桌面程序以恢复。")
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not overwrite:
         raise ProfileStoreError(f"Profile 已存在，拒绝覆盖: {path}")

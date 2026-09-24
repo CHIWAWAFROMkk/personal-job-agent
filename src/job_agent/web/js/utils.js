@@ -20,8 +20,31 @@ export function formatDateTime(value) {
   if (Number.isNaN(parsed.getTime())) return "—";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
-    hour12: false, timeZone: "Asia/Shanghai"
+    hour12: false
   }).format(parsed);
+}
+
+// datetime-local has no timezone: convert only at the UI boundary. The API
+// receives an explicit UTC instant, so calendar exports keep the same moment.
+export function localDateTimeInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = number => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function localDateTimeIso(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null;
+  const date = new Date(value);
+  // Reject nonexistent and repeated local times during daylight-saving transitions.
+  if (!Number.isFinite(date.getTime()) || localDateTimeInput(date) !== value) return null;
+  const offset = date.getTimezoneOffset();
+  for (const neighbor of [new Date(date.getTime() - 86400000), new Date(date.getTime() + 86400000)]) {
+    const alternative = new Date(date.getTime() + (neighbor.getTimezoneOffset() - offset) * 60000);
+    if (alternative.getTime() !== date.getTime() && localDateTimeInput(alternative) === value) return null;
+  }
+  return date.toISOString();
 }
 
 export function relativeFreshness(value) {

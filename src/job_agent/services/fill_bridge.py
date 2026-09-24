@@ -1,7 +1,6 @@
-"""Ephemeral, server-scoped handoff of user-entered OTPs. Never persists codes."""
+"""Minimal profile handoff and short-lived browser fill sessions."""
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import re
 import secrets
@@ -58,19 +57,16 @@ def minimal_fill_data(profile: Profile, job_id: int) -> dict:
 
 class FillBridge:
     SESSION_TTL = 120
-    REQUEST_TTL = 300
     LIMIT = 256
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
         self.lock = threading.RLock()
         self.sessions = {}
-        self.requests = {}
 
     def _prune(self):
         now = self.clock()
         self.sessions = {key: value for key, value in self.sessions.items() if value["deadline"] > now}
-        self.requests = {key: value for key, value in self.requests.items() if value["deadline"] > now}
 
     def create(self, job_id, url, source_url):
         origin = public_https_origin(url)
@@ -88,34 +84,6 @@ class FillBridge:
         with self.lock:
             self._prune()
             return [{"session_id": key, "job_id": value["job_id"], "origin": value["origin"]} for key, value in self.sessions.items() if value["job_id"] == job_id]
-
-    def manual(self, code, request_id=None, session_id=None, legacy_record=None):
-        if not isinstance(code, str) or not re.fullmatch(r"[0-9]{4,6}", code):
-            raise ValueError("请输入 4 至 6 位数字验证码，不接受整段短信。")
-        if request_id is not None and (not isinstance(request_id, str) or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,128}", request_id)):
-            raise ValueError("请求标识无效。")
-        if session_id is not None and (not isinstance(session_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{32,128}", session_id)):
-            raise ValueError("代填会话无效。")
-        digest = hashlib.sha256((str(session_id) + ":" + code).encode()).hexdigest()
-        # Legacy clients without request IDs still get bounded retry protection.
-        key = request_id or "legacy:" + digest
-        with self.lock:
-            self._prune()
-            previous = self.requests.get(key)
-            if previous:
-                if previous["digest"] != digest:
-                    raise ValueError("请求标识已用于另一条验证码，请重新录入。")
-                return {"ok": True, "duplicate": True, "queued": bool(session_id and session_id in self.sessions and self.sessions[session_id]["code"] is not None)}
-            if len(self.requests) >= self.LIMIT:
-                raise ValueError("验证码录入过于频繁，请稍后重试。")
-            if session_id:
-                if session_id not in self.sessions:
-                    raise ValueError("代填会话已过期，请在插件中重新连接。")
-                self.sessions[session_id]["code"] = code
-            elif legacy_record:
-                legacy_record(code, sender="manual")
-            self.requests[key] = {"digest": digest, "deadline": self.clock() + self.REQUEST_TTL}
-            return {"ok": True, "duplicate": False, "queued": bool(session_id)}
 
     def poll(self, session_id):
         with self.lock:

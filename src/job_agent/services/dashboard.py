@@ -9,7 +9,9 @@ import subprocess
 import threading
 import time
 import webbrowser
-from datetime import UTC, date, datetime, timedelta, timezone
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
+from datetime import UTC, date, datetime
 from email import policy
 from email.parser import BytesParser
 from http import HTTPStatus
@@ -140,7 +142,61 @@ class DashboardError(RuntimeError):
     pass
 
 
-_LOCAL_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
+class RequestBodyError(ValueError):
+    """A malformed or oversized HTTP request body supplied by a client."""
+
+
+class _ProfileSwitchBusy(RuntimeError):
+    """An in-flight user operation kept a profile switch from starting."""
+
+
+class _UserStateGate:
+    """Let requests overlap normally, but isolate an entire profile switch.
+
+    A long operation retains its shared lease until its output and response are
+    complete, so it cannot write old-user results after a successful switch.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._waiting_writers = 0
+
+    @contextmanager
+    def request(self) -> Iterator[None]:
+        with self._condition:
+            while self._writer or self._waiting_writers:
+                self._condition.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._readers -= 1
+                self._condition.notify_all()
+
+    @contextmanager
+    def switch(self, *, timeout_seconds: float = 15.0) -> Iterator[None]:
+        deadline = time.monotonic() + timeout_seconds
+        with self._condition:
+            self._waiting_writers += 1
+            try:
+                while self._writer or self._readers:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise _ProfileSwitchBusy("仍有求职操作正在执行，请等待其结束后重试切换用户。")
+                    self._condition.wait(remaining)
+                self._writer = True
+            finally:
+                self._waiting_writers -= 1
+                self._condition.notify_all()
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._writer = False
+                self._condition.notify_all()
 
 
 def _split_values(value: str) -> list[str]:
@@ -246,6 +302,12 @@ def create_dashboard_server(
             raise DashboardError(f"Dashboard 字体不存在: {font_path}")
         font_assets[f"/assets/fonts/{font_name}"] = font_path.read_bytes()
     action_token = secrets.token_urlsafe(32)
+    # A page keeps the action token it read with its profile. Rotate it after
+    # replacement so requests queued behind the switch cannot write to the
+    # next person's data. The agent context is separate: extensions must not
+    # receive a dashboard action token.
+    profile_context = secrets.token_urlsafe(32)
+    stale_action_tokens: set[str] = set()
     profile_path = profile_path or repository.path.parent / "profile.json"
     private_dir = private_dir or profile_path.parent
 
@@ -283,6 +345,9 @@ def create_dashboard_server(
     copilot_lock = threading.Lock()
     assist_runs: dict[str, dict[str, object]] = {}
     assist_lock = threading.Lock()
+    dashboard_cache: dict[str, object] = {"key": None, "payload": None, "created_at": 0.0}
+    dashboard_cache_lock = threading.Lock()
+    user_state_gate = _UserStateGate()
 
     def public_assist_plan(session: object) -> dict[str, object]:
         fields = list(getattr(session, "fields", []))
@@ -366,6 +431,12 @@ def create_dashboard_server(
             content_type: str,
             extra_headers: dict[str, str] | None = None,
         ) -> None:
+            if self.command == "POST":
+                # The browser may request fresh data as soon as it receives a
+                # write response, before this request thread finishes dispatch.
+                with dashboard_cache_lock:
+                    dashboard_cache["key"] = None
+                    dashboard_cache["payload"] = None
             self._response_started = True
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -377,7 +448,7 @@ def create_dashboard_server(
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "script-src 'self'; img-src 'self' data:; "
                 "connect-src 'self'; frame-src 'self' blob:; object-src 'none'; "
                 "frame-ancestors 'none'; base-uri 'none'",
             )
@@ -402,24 +473,27 @@ def create_dashboard_server(
         def _read_body(self, maximum: int) -> bytes:
             if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
                 self.close_connection = True
-                raise ValueError("请求必须包含唯一的 Content-Length，且不能使用分块传输。")
+                self._discard_small_rejected_body()
+                raise RequestBodyError("请求必须包含唯一的 Content-Length，且不能使用分块传输。")
             raw_length = self.headers.get("Content-Length", "")
             try:
                 length = int(raw_length)
             except ValueError as exc:
                 self.close_connection = True
-                raise ValueError("请求缺少有效的 Content-Length。") from exc
+                self._discard_small_rejected_body()
+                raise RequestBodyError("请求缺少有效的 Content-Length。") from exc
             if length < 0 or length > maximum:
                 self.close_connection = True
-                raise ValueError("请求内容过大。")
+                self._discard_small_rejected_body(limit_bytes=256 * 1024, timeout_seconds=0.25)
+                raise RequestBodyError("请求内容过大。")
             try:
                 body = self.rfile.read(length)
             except TimeoutError as exc:
                 self.close_connection = True
-                raise ValueError("上传请求超时，请重试。") from exc
+                raise RequestBodyError("上传请求超时，请重试。") from exc
             if len(body) != length:
                 self.close_connection = True
-                raise ValueError("请求内容未完整传输。")
+                raise RequestBodyError("请求内容未完整传输。")
             return body
 
         def _trusted_host(self) -> bool:
@@ -446,7 +520,30 @@ def create_dashboard_server(
             if len(origins) > 1 or (origins and origins[0] != "http://" + host):
                 return False
             supplied = self.headers.get("X-Job-Agent-Token", "")
-            return bool(supplied) and secrets.compare_digest(supplied.encode("utf-8"), action_token.encode("utf-8"))
+            return bool(supplied) and secrets.compare_digest(supplied.encode("utf-8"), self.action_token.encode("utf-8"))
+
+        def _advance_profile_context(self) -> str:
+            """Invalidate every old page and extension after a committed switch.
+
+            Called only while the exclusive user-state lease is held. Fresh
+            random contexts on each server start also invalidate stale clients
+            across restarts without storing a second identity file.
+            """
+            handler_class = type(self)
+            handler_class.stale_action_tokens.add(handler_class.action_token)
+            handler_class.action_token = secrets.token_urlsafe(32)
+            handler_class.profile_context = secrets.token_urlsafe(32)
+            return handler_class.action_token
+
+        def _reject_stale_profile_context(self) -> None:
+            self._discard_small_rejected_body()
+            self.close_connection = True
+            self._json(
+                {"error": "当前页面对应的用户资料已切换，请刷新页面后重新操作。",
+                 "code": "profile_changed"},
+                HTTPStatus.CONFLICT,
+                extra_headers={"Connection": "close"},
+            )
 
         def _reject_unauthorized_action(self) -> None:
             self._discard_small_rejected_body()
@@ -482,31 +579,39 @@ def create_dashboard_server(
         do_PATCH = _method_not_allowed
         do_DELETE = _method_not_allowed
 
-        def _discard_small_rejected_body(self) -> None:
+        def _discard_small_rejected_body(
+            self, *, limit_bytes: int = 8192, timeout_seconds: float = 0.1
+        ) -> None:
             # A Windows socket closed with unread POST bytes can reset before
-            # the client receives the 403. Discard bounded bytes, never parse
+            # the client receives the 400 or 403. Discard bounded bytes, never parse
             # or execute them. Large/malformed/slow uploads are simply closed.
             lengths = self.headers.get_all("Content-Length", [])
-            if self.headers.get("Transfer-Encoding") or len(lengths) != 1:
-                return
-            try:
-                length = int(lengths[0])
-            except ValueError:
-                return
-            if not 0 < length <= 8192:
-                return
+            has_te = bool(self.headers.get("Transfer-Encoding"))
+            if has_te:
+                length = 8192
+            elif len(lengths) == 1:
+                try:
+                    length = int(lengths[0])
+                except ValueError:
+                    return
+                if not 0 < length <= limit_bytes:
+                    return
+            else:
+                length = 8192
             previous_timeout = self.connection.gettimeout()
             try:
-                deadline = time.monotonic() + 0.2
+                deadline = time.monotonic() + timeout_seconds
                 while length > 0:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break
                     self.connection.settimeout(remaining)
-                    chunk = self.rfile.read1(length)
+                    chunk = self.rfile.read1(min(length, 8192))
                     if not chunk:
                         break
                     length -= len(chunk)
+                    if has_te:
+                        break
             except (OSError, ValueError):
                 pass
             finally:
@@ -544,13 +649,18 @@ def create_dashboard_server(
 
         def _dispatch_request(self, method: str) -> None:
             if not self._trusted_host():
+                self._discard_small_rejected_body()
                 self.close_connection = True
-                self._json({"error": "仅允许通过本机地址访问。"}, HTTPStatus.FORBIDDEN)
+                self._json({"error": "仅允许通过本机地址访问。"}, HTTPStatus.FORBIDDEN,
+                           extra_headers={"Connection": "close"})
                 return
             try:
                 path = urlsplit(self.path).path
             except ValueError:
-                self._json({"error": "请求地址格式不正确。"}, HTTPStatus.BAD_REQUEST)
+                self._discard_small_rejected_body()
+                self.close_connection = True
+                self._json({"error": "请求地址格式不正确。"}, HTTPStatus.BAD_REQUEST,
+                           extra_headers={"Connection": "close"})
                 return
             if not self._request_source_allowed(method, path):
                 self._discard_small_rejected_body()
@@ -559,10 +669,86 @@ def create_dashboard_server(
                            extra_headers={"Connection": "close"})
                 return
             try:
-                if dispatch(self, method, path):
-                    return
+                # Every data route holds a shared lease until its response is
+                # done. Switching uses an exclusive lease, so a slow import or
+                # AI preparation cannot write old-user results into the new
+                # user's database or output directory after the switch.
+                static_asset = method == "GET" and (
+                    path in {"/", "/favicon.ico", "/assets/dashboard.css"}
+                    or path.startswith(("/assets/fonts/", "/js/"))
+                )
+                switching = method == "POST" and path == "/api/profile/onboard"
+                lease = (
+                    nullcontext() if static_asset else
+                    user_state_gate.switch() if switching else
+                    user_state_gate.request()
+                )
+                with lease:
+                    if not static_asset and (self.private_dir / "backups" / "profile-switch-pending.json").exists():
+                        self._discard_small_rejected_body()
+                        self.close_connection = True
+                        self._json(
+                            {"error": "上次切换用户尚未恢复，已暂停数据访问。请关闭并重新启动程序以恢复。",
+                             "code": "profile_recovery_required"},
+                            HTTPStatus.SERVICE_UNAVAILABLE,
+                            extra_headers={"Connection": "close"},
+                        )
+                        return
+                    if method != "GET":
+                        supplied_action = self.headers.get("X-Job-Agent-Token", "")
+                        if supplied_action and supplied_action in self.stale_action_tokens:
+                            self._reject_stale_profile_context()
+                            return
+                        # The persistent Agent Token authenticates an extension,
+                        # but does not bind it to a person. Every Agent write
+                        # must also carry the context obtained when its popup
+                        # opened; missing context fails closed for older clients.
+                        if self._authorized_agent() and not self._authorized_action():
+                            supplied_context = self.headers.get("X-Profile-Context", "")
+                            if not supplied_context or not secrets.compare_digest(
+                                supplied_context.encode("utf-8"),
+                                self.profile_context.encode("utf-8"),
+                            ):
+                                self._reject_stale_profile_context()
+                                return
+                    if switching:
+                        with assist_lock:
+                            active_assist = any(
+                                item.get("status") in {"launching", "running", "active"}
+                                for item in assist_runs.values()
+                            )
+                        bridge = getattr(self.server, "fill_bridge", None)
+                        active_fill = False
+                        if bridge is not None:
+                            with bridge.lock:
+                                bridge._prune()
+                                active_fill = bool(bridge.sessions)
+                        if active_assist or active_fill:
+                            self._discard_small_rejected_body()
+                            self.close_connection = True
+                            self._json(
+                                {"error": "仍有浏览器辅助或代填会话，请结束会话后重试切换用户。"},
+                                HTTPStatus.CONFLICT,
+                                extra_headers={"Connection": "close"},
+                            )
+                            return
+                    if dispatch(self, method, path):
+                        return
+            except _ProfileSwitchBusy as exc:
+                self._discard_small_rejected_body()
+                self.close_connection = True
+                self._json(
+                    {"error": str(exc)}, HTTPStatus.CONFLICT,
+                    extra_headers={"Connection": "close"},
+                )
+                return
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 self.close_connection = True
+                return
+            except RequestBodyError as exc:
+                self.close_connection = True
+                if not getattr(self, "_response_started", False):
+                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             except Exception:
                 logger.exception("Dashboard request failed (%s).", method)
@@ -571,27 +757,33 @@ def create_dashboard_server(
                     self._json({"error": "处理请求时发生内部错误，请稍后重试。"}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
             if method != "GET":
+                self._discard_small_rejected_body()
                 self.close_connection = True
                 message = "此地址不支持写入。" if method == "POST" else "不支持此请求方法。"
-                self._json({"error": message}, HTTPStatus.METHOD_NOT_ALLOWED)
+                self._json({"error": message}, HTTPStatus.METHOD_NOT_ALLOWED,
+                           extra_headers={"Connection": "close"})
                 return
             self._headers(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8")
             self.wfile.write("Not found".encode("utf-8"))
 
     # Register routes once before accepting requests. Missing modules fail at
     # startup instead of dropping the first browser connection.
-    from job_agent.services.dashboard_routes import assets, jobs_api, copilot_api, agent_api, profile_api, tracking_api, mock_interview_api, dispatch
+    from job_agent.services.dashboard_routes import assets, jobs_api, copilot_api, agent_api, profile_api, tracking_api, mock_interview_api, candidate_api, dispatch
     Handler.repository = repository
     Handler.output_dir = output_dir
     Handler.profile_path = profile_path
     Handler.private_dir = private_dir
     Handler.action_token = action_token
+    Handler.profile_context = profile_context
+    Handler.stale_action_tokens = stale_action_tokens
     Handler.runtime_config_path = runtime_config_path
     Handler.api_usage_path = api_usage_path
     Handler.copilot_thread_path = copilot_thread_path
     Handler.copilot_lock = copilot_lock
     Handler.assist_runs = assist_runs
     Handler.assist_lock = assist_lock
+    Handler.dashboard_cache = dashboard_cache
+    Handler.dashboard_cache_lock = dashboard_cache_lock
     Handler.template = template
     Handler.stylesheet = stylesheet
     Handler.font_assets = font_assets
@@ -661,19 +853,8 @@ def run_dashboard(
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
-        from job_agent.services.sms_sync import get_lan_ip, start_sms_listener
-        start_sms_listener(port=8088, private_dir=server.RequestHandlerClass.private_dir)
-        print("短信同步监听已启动；配对链接请在本机设置中查看。")
-    except Exception as sms_exc:
-        logger.warning("短信监听服务启动异常: %s", sms_exc)
-    try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
         print("\nDashboard 已停止。")
     finally:
         server.server_close()
-        try:
-            from job_agent.services.sms_sync import stop_sms_listener
-            stop_sms_listener()
-        except Exception:
-            pass

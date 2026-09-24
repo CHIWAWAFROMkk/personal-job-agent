@@ -16,13 +16,17 @@ export function on(key, fn) {
 export function coalesceRefresh(refresh) {
   let pending = null;
   let queued = false;
-  return function () {
+  let lastArgs = [];
+  return function (...args) {
     queued = true;
+    if (args.length) lastArgs = args;
     if (!pending) {
       pending = Promise.resolve().then(async () => {
         while (queued) {
           queued = false;
-          await refresh();
+          const currentArgs = lastArgs;
+          lastArgs = [];
+          await refresh(...currentArgs);
         }
       }).finally(() => { pending = null; });
     }

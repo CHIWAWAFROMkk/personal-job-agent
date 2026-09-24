@@ -8,13 +8,11 @@
 <section aria-labelledby="fillHeading"><h2 id="fillHeading">辅助填写</h2>
   <label for="jobId">工作台岗位编号</label>
   <div class="row"><input id="jobId" inputmode="numeric" type="text" placeholder="例如 12"><button id="loadFillBtn">读取档案</button></div>
-  <p class="muted">仅预填客观空白字段。登录、附件、筛选问题和最终提交由你完成。</p>
+  <p class="muted">仅预填客观空白字段。登录、验证码、附件、筛选问题和最终提交由你完成。</p>
   <div id="fillReview" hidden><h3>确认发送到此网页</h3><dl id="fillFields"></dl><p id="attachmentNote" class="muted"></p>
     <p class="warning">静默预填不会触发输入事件。部分网站需要你手动重输一次才会识别；请检查后再继续。</p>
     <button id="confirmFillBtn" class="primary">确认预填当前页</button>
   </div>
-  <button id="otpBtn">接收此页验证码</button>
-  <p class="muted">先在网页聚焦短信验证码框，再点此按钮。然后到工作台录入验证码；连接保留 2 分钟。不支持图形验证码、滑块或分格输入。</p>
   <p id="fillStatus" role="status" aria-live="polite"></p>
 </section>
 <details><summary>收录当前岗位</summary><h2 id="jobTitle">正在识别…</h2><p id="jobMeta" class="muted"></p><p id="jobJd" class="jd-preview"></p><button id="sendBtn" disabled>收录到工作台</button><p id="statusMsg" role="status"></p></details>

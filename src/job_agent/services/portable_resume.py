@@ -38,6 +38,75 @@ _PROFILE_PHOTO_NAMES = ("profile-photo.jpg", "profile-photo.jpeg", "profile-phot
 _PROFILE_PHOTO_DIRS = ("photo", "assets")
 
 
+def resume_fact_review_sources(document: object) -> set[str]:
+    """Return review provenance independently of the last rendering engine.
+
+    Old cloud drafts only recorded ``generation.engine``. Keep that as a
+    conservative compatibility signal while new versions persist provenance
+    separately so a local edit cannot silently clear it.
+    """
+    if not isinstance(document, dict):
+        return set()
+    origin = document.get("fact_review_origin")
+    sources: set[str] = set()
+    if isinstance(origin, dict) and origin.get("required") is True:
+        raw_sources = origin.get("sources")
+        if isinstance(raw_sources, list):
+            sources.update(source for source in raw_sources if isinstance(source, str) and source)
+        if not sources:
+            sources.add("inherited_cloud_content")
+    generation = document.get("generation")
+    if isinstance(generation, dict) and generation.get("engine") == "cloud_composition":
+        sources.add("cloud_composition")
+    return sources
+
+
+def resume_fact_review_required(document: object) -> bool:
+    return bool(resume_fact_review_sources(document))
+
+
+def inherit_resume_fact_review(
+    content: dict, *upstream: object, source: str = "",
+    source_resume_text: str = "", sources: set[str] | None = None,
+) -> None:
+    """Carry any cloud-authored claims through later local processing."""
+    inherited_sources = resume_fact_review_sources(content)
+    for item in upstream:
+        inherited_sources.update(resume_fact_review_sources(item))
+    inherited_sources.update(sources or ())
+    if source:
+        inherited_sources.add(source)
+    if not inherited_sources:
+        return
+    origin: dict[str, object] = {"required": True, "sources": sorted(inherited_sources)}
+    for item in (content, *upstream):
+        if isinstance(item, dict) and isinstance(item.get("fact_review_origin"), dict):
+            text = item["fact_review_origin"].get("source_resume_text")
+            if isinstance(text, str) and text.strip():
+                origin["source_resume_text"] = text
+                break
+    if source_resume_text.strip():
+        origin["source_resume_text"] = source_resume_text.strip()
+    content["fact_review_origin"] = origin
+
+
+def verified_resume_content_sha256(manifest_path: Path, manifest: dict) -> str:
+    """Bind fact approval to the exact content JSON shown for the PDF."""
+    name = manifest.get("content_source")
+    expected = str(manifest.get("content_sha256") or "").upper()
+    if not isinstance(name, str) or not name or Path(name).name != name:
+        raise PortableResumeError("简历内容文件缺失或路径无效，请重新生成草稿。")
+    content_path = (manifest_path.parent / name).resolve()
+    if (
+        content_path.parent != manifest_path.parent.resolve()
+        or not content_path.is_file()
+        or not re.fullmatch(r"[0-9A-F]{64}", expected)
+        or _sha256(content_path) != expected
+    ):
+        raise PortableResumeError("简历内容摘要缺失或已变化，请重新生成草稿。")
+    return expected
+
+
 def find_profile_photo(private_dir: Path) -> Path | None:
     """在约定位置查找证件照（photo/ 优先，assets/ 兜底）。"""
     base = Path(private_dir).expanduser()
@@ -109,6 +178,44 @@ def _ready_fact_index(profile: Profile) -> dict[str, tuple[Experience, EvidenceF
     }
 
 
+def _is_imported_experience(experience: Experience) -> bool:
+    return experience.role == "简历原文事实导入"
+
+
+def _is_imported_metadata(experience: Experience, fact: EvidenceFact, profile: Profile) -> bool:
+    """Omit only pure lists already represented by confirmed skills/preferences.
+
+    A heading is not proof that its entire paragraph is metadata: qualifications,
+    proficiency and real experience under a skills heading must remain verbatim.
+    """
+    if not _is_imported_experience(experience):
+        return False
+    known_skills = {name.strip().casefold() for name in [skill.name for skill in profile.skills
+                    if profile.is_application_ready(skill.status)][:12]}
+    known_roles = {role.strip().casefold() for role in profile.job_search.target_roles}
+    known_locations = {location.strip().casefold() for location in profile.job_search.preferred_locations}
+    parts = [part.strip() for part in re.split(r"[。；;\n]", fact.statement) if part.strip()]
+    if not parts:
+        return False
+    for part in parts:
+        match = re.fullmatch(r"([^:：]+)[:：]\s*(.+)", part)
+        if not match:
+            return False
+        label, value = match.groups()
+        if label.strip() in {"技能", "专业技能", "技术技能", "核心技能"}:
+            known = known_skills
+        elif label.strip() in {"求职意向", "求职目标", "目标岗位"}:
+            known = known_roles
+        elif label.strip() in {"期望地点", "期望城市"}:
+            known = known_locations
+        else:
+            return False
+        values = {item.strip().casefold() for item in re.split(r"[、,，|/]", value) if item.strip()}
+        if not values or not values.issubset(known):
+            return False
+    return True
+
+
 def _ranked_facts(
     profile: Profile,
     result: MatchResult,
@@ -144,8 +251,9 @@ def _selected_experiences(
 ) -> list[tuple[Experience, list[EvidenceFact]]]:
     grouped: dict[str, tuple[Experience, list[EvidenceFact]]] = {}
     ranked = _ranked_facts(profile, result)
+    ranked = [item for item in ranked if not _is_imported_metadata(*item, profile)]
     # Certificates are rendered under skills, never as a job or a project.
-    ranked = [item for item in ranked if item[0].kind != ExperienceKind.OTHER] or ranked
+    ranked = [item for item in ranked if item[0].kind != ExperienceKind.OTHER or _is_imported_experience(item[0])] or ranked
     jd_signal = jd_text.casefold()
     concepts = (
             "excel", "vlookup", "数据透视表", "sql", "python", "数据", "统计",
@@ -174,7 +282,7 @@ def _selected_experiences(
     candidates = values[:5]
     for position, (experience, facts) in enumerate(candidates):
         reserved = len(candidates) - position - 1
-        limit = min(4 if experience.kind in _WORK_KINDS else 2, budget - reserved)
+        limit = min(4 if experience.kind in _WORK_KINDS or _is_imported_experience(experience) else 2, budget - reserved)
         ordered = []
         seen_text = set()
         for fact in sorted(facts, key=lambda fact: -relevance(fact)):
@@ -248,65 +356,35 @@ def build_portable_resume_content(
         for item in profile.education
         if profile.is_application_ready(item.status)
     ][:2]
-    relevant_terms = list(
-        dict.fromkeys(term.strip() for term in skills if term.strip())
-    )[:8]
-    education_lead = ""
-    if education:
-        first_edu = education[0]
-        education_lead = "".join(
-            str(first_edu.get(key) or "")
-            for key in ("institution", "major", "degree")
-        ).strip()
-    top_orgs = [
-        str(experience.organization)
-        for experience, _ in selected[:2]
-        if experience.organization
-    ]
-    summary_parts: list[str] = []
-    if education_lead:
-        summary_parts.append(f"{education_lead}在读")
-    if relevant_terms:
-        summary_parts.append(f"具备 {'、'.join(relevant_terms[:5])}等能力")
-    if top_orgs:
-        summary_parts.append(f"曾在{'、'.join(top_orgs)}积累实践经验")
-    identity = "；".join(summary_parts) if summary_parts else ""
-    # 求职意向由模板的目标行呈现；摘要只写个人优势，不堆"期望产出"类空话
-    summary = (identity + "。") if identity else f"应聘{job.title}。"
-    # Prefer actual actions/deliverables over a list of school/company names.
-    evidence_summary = []
-    for _, facts in selected:
-        if facts:
-            statement = facts[0].statement.strip()
-            if statement not in evidence_summary and len("；".join(evidence_summary + [statement])) <= 200:
-                evidence_summary.append(statement)
-        if len(evidence_summary) == 2:
-            break
-    if evidence_summary:
-        summary = "；".join(s.rstrip("。；") for s in evidence_summary) + "。"
+    # Local selection has no independent summary: copying selected bullets here
+    # repeats the same claims. The target, skills and evidence have their own sections.
+    summary = ""
 
     work_entries: list[dict[str, object]] = []
     internship_entries: list[dict[str, object]] = []
     project_entries: list[dict[str, object]] = []
     other_entries: list[dict[str, object]] = []
+    imported_entries: list[dict[str, object]] = []
     for experience, facts in selected:
         entry = {
             "experience_id": experience.id,
             "experience_kind": experience.kind.value,
-            "organization": experience.organization or "机构 / 项目名称待完善",
-            "role": experience.role,
+            "organization": experience.organization or "",
+            "role": "" if _is_imported_experience(experience) else experience.role,
             "dates": _date_range(experience),
             "context": experience.summary.split("。")[0] if "派遣" in experience.summary else "",
             "bullets": [
                 {
-                    "label": _bullet_label(experience, fact),
+                    "label": "" if _is_imported_experience(experience) else _bullet_label(experience, fact),
                     "text": fact.statement,
                     "fact_ids": [fact.id],
                 }
                 for fact in facts
             ],
         }
-        if experience.kind == ExperienceKind.INTERNSHIP:
+        if _is_imported_experience(experience):
+            imported_entries.append(entry)
+        elif experience.kind == ExperienceKind.INTERNSHIP:
             internship_entries.append(entry)
         elif experience.kind == ExperienceKind.EMPLOYMENT:
             work_entries.append(entry)
@@ -323,6 +401,22 @@ def build_portable_resume_content(
         sections.append({"title": "项目经历", "entries": project_entries})
     if other_entries:
         sections.append({"title": "其他经历", "entries": other_entries})
+    if imported_entries:
+        sections.append({"title": "相关经历", "entries": imported_entries})
+
+    rendered_facts = [fact for _, facts in selected for fact in facts]
+    shown_text = {re.sub(r"\s+", "", fact.statement) for fact in rendered_facts}
+    highlights = []
+    for experience in profile.experiences:
+        if experience.kind != ExperienceKind.OTHER or _is_imported_experience(experience):
+            continue
+        for fact in experience.facts:
+            key = re.sub(r"\s+", "", fact.statement)
+            if profile.is_application_ready(fact.status) and key not in shown_text and len(highlights) < 3:
+                highlights.append({"text": fact.statement, "fact_ids": [fact.id]})
+                rendered_facts.append(fact)
+                shown_text.add(key)
+    rendered_ids = {fact.id for fact in rendered_facts}
 
     contact = profile.person.contact
     return {
@@ -348,14 +442,11 @@ def build_portable_resume_content(
             "generated_at": generated_at.isoformat(),
         },
         "summary": summary,
-        # The summary already introduces skills and experience. Leave this
-        # optional section empty unless the user supplies distinct content.
+        # Leave optional authored sections empty until distinct content is supplied.
         "self_evaluation": "",
         "skills": skills,
         "availability": profile.job_search.availability.model_dump(mode="json"),
-        "highlights": [{"text": fact.statement, "fact_ids": [fact.id]}
-                       for experience in profile.experiences if experience.kind == ExperienceKind.OTHER
-                       for fact in experience.facts if profile.is_application_ready(fact.status)][:3],
+        "highlights": highlights,
         "experience_sections": sections,
         "selection": {
             "protected_experience_ids": [experience.id for experience, _ in selected],
@@ -363,11 +454,15 @@ def build_portable_resume_content(
                 if e.kind != ExperienceKind.OTHER and any(profile.is_application_ready(f.status) for f in e.facts)
                 and e.id not in {selected_e.id for selected_e, _ in selected}],
             "policy": "按JD排序；最多五段、十条事实，先保留经历覆盖，再分配细节。",
+            "omitted_fact_ids": [fact.id for experience in profile.experiences for fact in experience.facts
+                if profile.is_application_ready(fact.status) and fact.id not in rendered_ids],
+            "metadata_fact_ids": [fact.id for experience in profile.experiences for fact in experience.facts
+                if profile.is_application_ready(fact.status) and _is_imported_metadata(experience, fact, profile)],
         },
         "education": education,
         "truthfulness": {
             "confirmed_fact_ids": [
-                fact.id for _, facts in selected for fact in facts
+                fact.id for fact in rendered_facts
             ],
             "excluded_gaps": result.gaps,
             "excluded_unknowns": result.unknowns,
@@ -765,6 +860,7 @@ def _render_resume_version(
     """把已构建好的 content 渲染为 DOCX/PDF 并写入版本目录与质检清单。"""
     # Ranking scores belong to the job dashboard, never to an application artifact.
     content = json.loads(json.dumps(content, ensure_ascii=False))
+    inherit_resume_fact_review(content)
     target = dict(content.get("target") or {})
     target.pop("match_score", None)
     content["target"] = target
@@ -843,6 +939,7 @@ def _render_resume_version(
             "created_at": generated_at.isoformat(),
             "template_id": content["template_id"],
             "content_source": content_path.name,
+            "content_sha256": _sha256(content_path),
             "target": target_payload,
             "artifacts": {
                 "docx": {"path": docx_path.name, "sha256": _sha256(docx_path)},
@@ -860,11 +957,19 @@ def _render_resume_version(
                 "layout_density": content.get("layout_density", "standard"),
                 "docx_structural_review": "passed",
                 "pdf_text_integrity": "passed" if spec and spec["id"] == "reference-a4" else "not_checked",
-                "truthfulness_check": "passed",
+                # A cloud response can cite confirmed fact IDs while inventing
+                # a new achievement. Numeric checks do not establish truth.
+                "truthfulness_check": (
+                    "pending_user_review"
+                    if resume_fact_review_required(content)
+                    else "passed"
+                ),
                 "pdf_visual_review": "pending_user_review",
             },
             "generation": content.get("generation", {"engine": "local_selection", "review_required": True}),
         }
+        if resume_fact_review_required(content):
+            manifest["fact_review_origin"] = content["fact_review_origin"]
         if extra_manifest:
             manifest.update(extra_manifest)
         if extra_qa:
@@ -936,29 +1041,132 @@ def find_latest_resume_manifest(
     if not applications_dir.is_dir():
         return None
     for path in applications_dir.rglob("resume-version*.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        payload = read_resume_manifest(path)
+        if payload is None:
             continue
-        target = payload.get("target", {})
-        if int(target.get("job_id") or 0) != job_id:
+        if payload["target"]["job_id"] != job_id:
             continue
-        status = str(payload.get("qa", {}).get("pdf_visual_review", ""))
+        status = payload["qa"]["pdf_visual_review"]
         if visual_status is not None and status != visual_status:
             continue
-        candidates.append((path.stat().st_mtime, path.resolve()))
+        try:
+            candidates.append((path.stat().st_mtime, path.resolve()))
+        except OSError:
+            continue
     if not candidates:
         return None
     return max(candidates, key=lambda item: (item[0], str(item[1])))[1]
 
 
+def read_resume_manifest(path: Path, *, allow_legacy_without_job_id: bool = False) -> dict | None:
+    """Read one usable manifest; quarantine malformed siblings during scans.
+
+    The same schema check is used by latest-version lookup and hash download.
+    A broken version in another job must never interrupt the current job.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, RecursionError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    target = payload.get("target")
+    qa = payload.get("qa")
+    artifacts = payload.get("artifacts")
+    if not isinstance(target, dict) or not isinstance(qa, dict) or not isinstance(artifacts, dict):
+        return None
+    raw_job_id = target.get("job_id")
+    if raw_job_id is None and allow_legacy_without_job_id:
+        normalized_job_id = None
+    elif isinstance(raw_job_id, bool) or not (
+        isinstance(raw_job_id, int) and raw_job_id > 0
+        or isinstance(raw_job_id, str) and len(raw_job_id) <= 12
+        and raw_job_id.isascii() and raw_job_id.isdecimal() and int(raw_job_id) > 0
+    ):
+        return None
+    else:
+        normalized_job_id = int(raw_job_id)
+    visual_status = qa.get("pdf_visual_review")
+    truth_status = qa.get("truthfulness_check")
+    if not isinstance(visual_status, str) or visual_status not in {"pending_user_review", "passed"}:
+        return None
+    if not isinstance(truth_status, str) or truth_status not in {"pending_user_review", "passed"}:
+        return None
+    if any(not isinstance(artifacts.get(kind), dict) for kind in ("pdf", "docx")):
+        return None
+    target = dict(target)
+    if normalized_job_id is not None:
+        target["job_id"] = normalized_job_id
+    return {**payload, "target": target}
+
+
+def resume_manifest_fact_review_sources(manifest_path: Path, manifest: dict) -> set[str]:
+    """Trace pre-upgrade edited versions that lack a persisted provenance flag.
+
+    Older local revisions recorded only the most recent engine, but their
+    ``based_on`` pointer still leads to the cloud-authored parent. An invalid
+    or missing parent cannot prove the draft is local, so fail closed.
+    """
+    sources = resume_fact_review_sources(manifest)
+    current_path = manifest_path.resolve()
+    applications_root = current_path.parent.parent
+    current = manifest
+    visited = {current_path}
+    job_id = dict(manifest.get("target") or {}).get("job_id")
+    for _ in range(64):
+        raw_parent = current.get("based_on")
+        if not isinstance(raw_parent, str) or not raw_parent.strip():
+            return sources
+        parent = Path(raw_parent.strip())
+        if not parent.is_absolute():
+            parent = current_path.parent / parent
+        parent = parent.resolve()
+        if parent in visited or not parent.is_relative_to(applications_root):
+            return sources | {"unknown_prior_version"}
+        visited.add(parent)
+        parent_manifest = read_resume_manifest(parent, allow_legacy_without_job_id=True)
+        if parent_manifest is None:
+            return sources | {"unknown_prior_version"}
+        parent_job_id = dict(parent_manifest.get("target") or {}).get("job_id")
+        if job_id is not None and parent_job_id not in {None, job_id}:
+            return sources | {"unknown_prior_version"}
+        sources.update(resume_fact_review_sources(parent_manifest))
+        current, current_path = parent_manifest, parent
+    return sources | {"unknown_prior_version"}
+
+
+def resume_manifest_fact_review_required(manifest_path: Path, manifest: dict) -> bool:
+    return bool(resume_manifest_fact_review_sources(manifest_path, manifest))
+
+
+def resume_manifest_fact_approved(manifest_path: Path, manifest: dict) -> bool:
+    """Require user approval for the actual PDF and content of this lineage."""
+    if not resume_manifest_fact_review_required(manifest_path, manifest):
+        return True
+    approval = manifest.get("fact_approval")
+    if not isinstance(approval, dict):
+        return False
+    try:
+        resume_artifact_from_manifest(manifest_path, "pdf")
+        content_sha256 = verified_resume_content_sha256(manifest_path, manifest)
+    except PortableResumeError:
+        return False
+    expected_pdf = str(manifest.get("artifacts", {}).get("pdf", {}).get("sha256", "")).upper()
+    return bool(
+        approval.get("approved_by") == "user"
+        and approval.get("approved_at")
+        and approval.get("pdf_sha256") == expected_pdf
+        and approval.get("content_sha256") == content_sha256
+        and dict(manifest.get("qa") or {}).get("truthfulness_check") == "passed"
+    )
+
+
 def resume_artifact_from_manifest(manifest_path: Path, kind: str) -> Path:
     if kind not in {"pdf", "docx"}:
         raise PortableResumeError("只支持读取 PDF 或 DOCX 简历草稿。")
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PortableResumeError(f"简历质检清单无法读取: {exc}") from exc
+    payload = read_resume_manifest(manifest_path)
+    if payload is None:
+        raise PortableResumeError("简历质检清单损坏或缺少必要字段，请重新生成该岗位草稿。")
     name = str(payload.get("artifacts", {}).get(kind, {}).get("path", "")).strip()
     expected = str(payload.get("artifacts", {}).get(kind, {}).get("sha256", "")).upper()
     artifact = (manifest_path.parent / name).resolve()

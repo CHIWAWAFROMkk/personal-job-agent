@@ -20,6 +20,21 @@ def geocode(address: str) -> dict[str, object]:
 
 
 class CommuteRoutingTests(unittest.TestCase):
+    def test_attempted_count_keeps_failed_second_provider_request_visible(self) -> None:
+        calls = 0
+        def fetch(_endpoint: str, _params: dict[str, str]) -> dict[str, object]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return geocode("起点")
+            raise TimeoutError("synthetic timeout")
+
+        provider = AmapCommuteProvider("synthetic-key", fetch_json=fetch)
+        with self.assertRaises(TimeoutError):
+            provider.calculate(origin_address="起点", destination_address="终点")
+        self.assertEqual(provider.request_count, 1)
+        self.assertEqual(provider.attempted_count, 2)
+
     def test_transit_routes_are_sorted_and_explainable(self) -> None:
         calls: list[tuple[str, dict[str, str]]] = []
 

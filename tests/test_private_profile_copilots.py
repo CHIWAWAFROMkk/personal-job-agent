@@ -38,13 +38,23 @@ class PrivateProfileCopilotTests(unittest.TestCase):
         self.assertIn(profile.experiences[0].facts[0].statement, text)
         self.assertNotIn(profile.experiences[0].facts[1].statement, text)
 
+    def test_legacy_imported_name_is_not_an_experience(self):
+        profile = sample_profile()
+        profile.person.display_name = '验收用户'
+        original = profile.experiences[0].facts[0]
+        identity = original.model_copy(update={'id': 'synthetic-name', 'statement': '验收用户（合成资料）'})
+        profile.experiences[0].facts.insert(0, identity)
+        text = str(generate_greetings(self.job, profile, RuntimeConfig()))
+        self.assertNotIn('我的相关经历：验收用户', text)
+        self.assertIn(original.statement, text)
+
     @patch('openai.OpenAI')
     def test_client_defaults_explicit_models_and_limits(self, factory):
         for provider, default in [('openai', 'gpt-4o'), ('deepseek', 'deepseek-chat')]:
             config = SimpleNamespace(ai=SimpleNamespace(provider=provider, api_key='synthetic-key', model='', base_url=None))
             _, model = get_openai_client(config)
             self.assertEqual(model, default)
-            self.assertEqual(factory.call_args.kwargs['timeout'], 15)
+            self.assertEqual(factory.call_args.kwargs['timeout'], 25)
             self.assertEqual(factory.call_args.kwargs['max_retries'], 0)
             config.ai.model = 'user-selected-model'
             self.assertEqual(get_openai_client(config)[1], 'user-selected-model')

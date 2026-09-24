@@ -16,8 +16,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from job_agent.services.ai_errors import safe_ai_error_message
+from job_agent.services.portable_resume import inherit_resume_fact_review
 from job_agent.services.resume_editor import validate_resume_content
 from job_agent.services.runtime_config import RuntimeConfig
 
@@ -107,12 +109,15 @@ def _parse_model_json(raw: str) -> dict[str, object]:
 def _invoke_ai(
     config: RuntimeConfig,
     user_payload: str,
+    *,
+    request_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> tuple[str, int, int]:
     """按运行配置调用云端 AI；供测试 monkeypatch。"""
+    invoke = request_call or (lambda call: call())
     if config.ai.provider == "codex":
         from job_agent.services.codex_bridge import CodexBridgeError, codex_completion
         try:
-            return codex_completion(_SYSTEM_PROMPT, user_payload, model=config.ai.model)
+            return invoke(lambda: codex_completion(_SYSTEM_PROMPT, user_payload, model=config.ai.model))
         except CodexBridgeError as exc:
             raise ResumeImportError(str(exc)) from exc
     try:
@@ -123,7 +128,9 @@ def _invoke_ai(
     if config.ai.provider == "openai":
         if not config.ai.api_key:
             raise ResumeImportError("OpenAI API Key 尚未配置。")
-        response = OpenAI(api_key=config.ai.api_key).responses.create(
+        response = invoke(lambda: OpenAI(
+            api_key=config.ai.api_key, timeout=60, max_retries=0,
+        ).responses.create(
             model=config.ai.model,
             store=False,
             input=[
@@ -131,14 +138,16 @@ def _invoke_ai(
                 {"role": "user", "content": user_payload},
             ],
             max_output_tokens=2400,
-        )
+        ))
         content = (getattr(response, "output_text", "") or "").strip()
     elif config.ai.provider == "openai_compatible":
         if not config.ai.base_url:
             raise ResumeImportError("OpenAI 兼容 API 地址尚未配置。")
-        response = OpenAI(
+        response = invoke(lambda: OpenAI(
             api_key=config.ai.api_key or "local-api-no-key",
             base_url=config.ai.base_url,
+            timeout=60,
+            max_retries=0,
         ).chat.completions.create(
             model=config.ai.model,
             messages=[
@@ -146,7 +155,7 @@ def _invoke_ai(
                 {"role": "user", "content": user_payload},
             ],
             temperature=0.1,
-        )
+        ))
         content = (response.choices[0].message.content or "").strip()
     else:
         raise ResumeImportError("当前 AI Provider 不支持云端解析。")
@@ -168,6 +177,7 @@ def import_resume_text_into_draft(
     current_content: dict[str, object],
     *,
     config: RuntimeConfig,
+    request_call: Callable[[Callable[[], Any]], Any] | None = None,
 ) -> ResumeImportSuggestion:
     """把原简历文本解析为可编辑底稿建议（不写盘、不改变原对象）。"""
     if config.ai.provider == "local":
@@ -193,7 +203,7 @@ def import_resume_text_into_draft(
     )
 
     try:
-        raw, input_tokens, output_tokens = _invoke_ai(config, user_payload)
+        raw, input_tokens, output_tokens = _invoke_ai(config, user_payload, request_call=request_call)
     except ResumeImportError:
         raise
     except Exception as exc:
@@ -345,6 +355,13 @@ def import_resume_text_into_draft(
     if not merged["education"]:
         warnings.append("未能从原文解析出教育背景，已沿用当前草稿的教育信息。")
         merged["education"] = list(current.get("education") or [])
+
+    merged["generation"] = {
+        "engine": "cloud_import", "method": "resume_import", "review_required": True,
+    }
+    inherit_resume_fact_review(
+        merged, current, source="cloud_import", source_resume_text=text,
+    )
 
     try:
         validate_resume_content(merged)

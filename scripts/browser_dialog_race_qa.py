@@ -17,10 +17,9 @@ def main():
             browser = p.chromium.launch(channel='msedge', headless=True)
             page = browser.new_page(viewport={'width': 1266, 'height': 900})
             page.set_default_timeout(10000)
-            errors, profile_wait, status_wait, calls = [], [], [], []
+            errors, profile_wait, calls, status_calls = [], [], [], []
             page.on('pageerror', lambda error: errors.append(str(error)))
-            page.route('**/api/sms/setup', lambda route: route.fulfill(json={}))
-            mode = {'profile_hold': True, 'status_hold': False}
+            mode = {'profile_hold': True}
 
             def profile(route):
                 if mode['profile_hold']:
@@ -29,10 +28,8 @@ def main():
                     route.fulfill(json={'facts': {'name': 'Synthetic current profile'}})
 
             def status(route):
-                if mode['status_hold']:
-                    status_wait.append(route)
-                else:
-                    route.fulfill(json={'cdp_connected': True})
+                status_calls.append(route.request.url)
+                route.fulfill(json={'live_available': False})
 
             def execute(route):
                 calls.append(route.request.url)
@@ -49,7 +46,10 @@ def main():
 
             def open_job(job):
                 page.locator(f'[data-select-job="{job}"]').click()
-                page.locator('[data-detail-action="browser-use-assist"]').click()
+                button = page.locator('[data-detail-action="browser-use-assist"]')
+                if not button.is_visible():
+                    page.locator('.job-more summary').click()
+                button.click()
 
             open_job(a)
             expect(page.locator('#browserUseRunBtn')).to_be_disabled()
@@ -66,23 +66,22 @@ def main():
             assert calls[-1].endswith(f'/{b}/browser-use')
             page.locator('#closeBrowserUseButton').click()
 
-            mode['status_hold'] = True
             open_job(a)
             expect(page.locator('#buFactsStatus')).to_contain_text('来自当前档案')
+            expect(page.locator('#browserUseRunBtn')).to_be_disabled()
             page.locator('#closeBrowserUseButton').click()
-            mode['status_hold'] = False
             open_job(b)
             expect(page.locator('#browserUseDryRunBtn')).to_be_enabled()
-            assert len(status_wait) == 1
-            status_wait.pop().fulfill(json={'cdp_connected': False, 'chrome_info': {'command_powershell': 'STALE COMMAND'}})
             page.locator('#browserUseDryRunBtn').click()
             expect(page.locator('#browserUseLogContent')).to_contain_text('Synthetic preview')
-            expect(page.locator('#browserUseCdpStatus')).not_to_contain_text('STALE COMMAND')
+            expect(page.locator('#browserUseCdpStatus')).to_contain_text('实站 AI 代填已暂停')
+            expect(page.locator('#browserUseRunBtn')).to_be_disabled()
             assert len(calls) == 2 and all(url.endswith(f'/{b}/browser-use') for url in calls)
+            assert not status_calls, status_calls
             assert not errors, errors
             page.screenshot(path=str(output / 'current-dialog.png'))
             browser.close()
-        report = {'slow_profile_close': True, 'late_profile_ignored': True, 'late_environment_ignored': True, 'only_current_job_mock_preview': True, 'errors': errors}
+        report = {'slow_profile_close': True, 'late_profile_ignored': True, 'live_entry_disabled': True, 'only_current_job_mock_preview': True, 'errors': errors}
         (output / 'report.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
         print(json.dumps(report))
     finally:

@@ -1,4 +1,4 @@
-"""Synthetic browser checks for private previews and polling teardown."""
+"""Synthetic browser checks for private previews and removed SMS UI."""
 import json
 import threading
 from pathlib import Path
@@ -24,11 +24,9 @@ def main():
                 page.on('pageerror', lambda e: errors.append(str(e)))
                 page.on('requestfailed', lambda r: network_failures.append({'path':r.url.split('?')[0], 'failure':r.failure}))
                 page.add_init_script("Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>{window.clipboardWasWritten=Boolean(value);}}});")
-                calls = []
-                def sms(route):
-                    calls.append(1)
-                    route.fulfill(json={'is_listening':True,'webhook_url':'http://127.0.0.1:8088/api/sms/webhook?token=synthetic-not-a-secret', 'latest_code':{'code':'123456','age_seconds':0}})
-                page.route('**/api/sms/setup', sms)
+                sms_requests = []
+                page.on('request', lambda request: sms_requests.append(request.url)
+                        if '/api/sms' in request.url else None)
                 page.route('**/api/jobs/browser-use/status', lambda route: route.fulfill(json={'cdp_connected':False,'chrome_info':{}}))
                 page.goto(f'http://127.0.0.1:{server.server_port}', wait_until='networkidle')
                 if width <= 900:
@@ -43,25 +41,22 @@ def main():
                 button.click()
                 expect(page.locator('#buFactsStatus')).to_contain_text('来自当前档案')
                 expect(page.locator('#buFactName')).not_to_have_text('待完善')
-                expect(page.locator('#smsCurrentBadge')).to_have_text('已收到')
+                expect(page.locator('#browserUseDialog')).to_be_visible()
+                expect(page.locator('#browserUseSmsSection, [id^="sms"]')).to_have_count(0)
                 expect(page.locator('#buFactGpa')).to_have_text('待完善')
                 size = page.locator('#closeBrowserUseButton').bounding_box()
                 assert size['width'] >= 44 and size['height'] >= 44, {'size':size,'network':network_failures}
                 page.screenshot(path=str(output/f'{width}-preview.png'))
-                initial_calls = len(calls)
-                page.wait_for_timeout(2400)
-                assert len(calls) == initial_calls, 'Polling did not slow after receiving a code'
                 page.locator('#closeBrowserUseButton').click()
-                page.wait_for_timeout(10200)
-                assert len(calls) == initial_calls
-                assert page.locator('#smsWebhookUrlDisplay').inner_text() == '打开弹窗后读取安全链接'
+                expect(page.locator('#browserUseDialog')).not_to_be_visible()
                 page.locator('#geminiProfileAvatarBtn').click()
                 page.locator('#copyAgentTokenButton').click()
                 expect(page.locator('#copyAgentTokenStatus')).to_contain_text('已复制')
                 assert page.evaluate('window.clipboardWasWritten')
                 page.screenshot(path=str(output/f'{width}-settings.png'))
                 assert not errors, errors
-                report[str(width)] = {'page_errors':errors, 'close_size':size, 'copy_pass':True, 'polling_pass':True}
+                assert not sms_requests, sms_requests
+                report[str(width)] = {'page_errors':errors, 'close_size':size, 'copy_pass':True, 'no_sms_requests':True}
                 page.close()
             browser.close()
     finally:

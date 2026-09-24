@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "checked_at_utc": "2026-09-23T10:51:49.3682987Z",
+  "repository": "https://github.com/zhengkid/Dream-RSI",
+  "commit": "4149ea9181ab1db80f85717ffda2c9f0f130e85b",
+  "commit_date_utc": "2026-09-16T10:32:18Z",
+  "license_status": "No LICENSE file in complete pinned tree; GitHub license metadata null. No redistribution or integration permission inferred.",
+  "purpose": "Local research reference only; no installation, execution, runtime integration or upstream code available.",
+  "files": [
+    {
+      "path": "upstream/README.md",
+      "source": "https://raw.githubusercontent.com/zhengkid/Dream-RSI/4149ea9181ab1db80f85717ffda2c9f0f130e85b/README.md",
+      "bytes": 7037,
+      "sha256": "88d12a26bc683b49b74824488d40661ea91ad28feac25566aa4d1ef8fa064747",
+      "upstream_git_blob": "1aee7a34a9040cc2b4bcbf729ead44aeed5f02f5"
+    },
+    {
+      "path": "upstream/CITATION.cff",
+      "source": "https://raw.githubusercontent.com/zhengkid/Dream-RSI/4149ea9181ab1db80f85717ffda2c9f0f130e85b/CITATION.cff",
+      "bytes": 3441,
+      "sha256": "fefb67e343b06255c91876c3ad5dd765bebe43c7017cef2a4fa8a2f2571d8e52",
+      "upstream_git_blob": "c0fb8e935c444499ff766588b5e58d51678e720b"
+    },
+    {
+      "path": "upstream/papers/Dream-RSI.pdf",
+      "source": "https://raw.githubusercontent.com/zhengkid/Dream-RSI/4149ea9181ab1db80f85717ffda2c9f0f130e85b/papers/Dream-RSI.pdf",
+      "bytes": 976554,
+      "sha256": "5701649cd9793b29cd5fb32d727d101ad21fb23639c0d9f33c9adef826194342",
+      "upstream_git_blob": "d7cb8e2f0d7c805b1b99f3db2be96ffa6402dc47"
+    }
+  ],
+  "verification": "File lengths and git hash-object match GitHub complete recursive tree response observed in this session; tree truncated=false.",
+  "upstream_inventory": "Only .gitignore, CITATION.cff, README.md, assets/ presentation graphics and papers/Dream-RSI.pdf. No implementation, reproduction scripts or license file."
+}

@@ -20,6 +20,19 @@ JD = """
 
 
 class LocalMatcherTests(unittest.TestCase):
+    def test_inline_metadata_does_not_swallow_neighbor_fields(self) -> None:
+        job = structure_job_locally(
+            "仅用于验收的虚构岗位。公司：演示数据工作室；岗位：数据运营实习生；地点：上海。\n"
+            "任职要求：熟练使用 SQL。"
+        )
+        self.assertEqual((job.company, job.title, job.location),
+                         ("演示数据工作室", "数据运营实习生", "上海"))
+
+    def test_english_inline_metadata_preserves_company_punctuation(self) -> None:
+        job = structure_job_locally("Company: Example, Inc. | Title: Data Engineer | Location: Shanghai")
+        self.assertEqual((job.company, job.title, job.location),
+                         ("Example, Inc.", "Data Engineer", "Shanghai"))
+
     def test_only_confirmed_evidence_can_match(self) -> None:
         profile = sample_profile()
         job = structure_job_locally(JD)

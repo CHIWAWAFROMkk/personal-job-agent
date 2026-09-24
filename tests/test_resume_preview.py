@@ -111,9 +111,8 @@ class ResumePreviewTests(unittest.TestCase):
     def test_http_pdf_no_store_and_foreign_origin_denied(self):
         profile_path = self.root / "profile.json"
         save_profile(self.profile, profile_path)
-        with patch("job_agent.services.sms_sync.get_lan_ip", return_value="127.0.0.1"):
-            server = create_dashboard_server(self.repository, output_dir=self.root / "output", port=0,
-                profile_path=profile_path, private_dir=self.root)
+        server = create_dashboard_server(self.repository, output_dir=self.root / "output", port=0,
+            profile_path=profile_path, private_dir=self.root)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

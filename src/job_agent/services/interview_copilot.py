@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 from job_agent.models.job_record import JobDetail
 from job_agent.models.profile import Profile
@@ -46,6 +46,9 @@ def generate_interview_prep(
     job: JobDetail,
     profile: Profile,
     config: RuntimeConfig,
+    *,
+    on_cloud_response: Callable[[object], None] | None = None,
+    on_cloud_failure: Callable[[Exception], None] | None = None,
 ) -> InterviewPrepResult:
     """根据真实经历库与岗位 JD 生成 5 大杀手锏面试预测题与 STAR 防御话术。"""
     evidence = profile.application_context()
@@ -76,14 +79,21 @@ def generate_interview_prep(
                     "company": job.company, "role": job.title, "jd": job.jd_text[:5000],
                     "verified_profile": verified,
                 }, ensure_ascii=False)
-                chat_res = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    temperature=0.3,
-                )
+                try:
+                    chat_res = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        temperature=0.3,
+                    )
+                except Exception as exc:
+                    if on_cloud_failure is not None:
+                        on_cloud_failure(exc)
+                    raise
+                if on_cloud_response is not None:
+                    on_cloud_response(chat_res)
                 content = (chat_res.choices[0].message.content or "").strip()
                 m = re.search(r"\{.*\}", content, re.DOTALL)
                 if m:
