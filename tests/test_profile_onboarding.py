@@ -33,7 +33,7 @@ test@example.com 13800138000
 class ProfileOnboardingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
+        self.root = Path(self.temp_dir.name).resolve()
         self.profile_path = self.root / "private" / "profile.json"
         self.private_dir = self.root / "private"
         self.output_dir = self.root / "output"

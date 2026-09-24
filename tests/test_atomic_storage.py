@@ -21,7 +21,7 @@ class AtomicStorageTests(unittest.TestCase):
     def test_concurrent_writers_publish_complete_independent_files(self) -> None:
         for kind in ("text", "bytes", "json", "profile"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp_dir:
-                path = Path(temp_dir) / "shared.json"
+                path = Path(temp_dir).resolve() / "shared.json"
                 path.write_text("original", encoding="utf-8")
                 # An unrelated legacy temporary file must never be reused or removed.
                 legacy = path.with_suffix(".json.tmp")

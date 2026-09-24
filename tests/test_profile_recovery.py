@@ -30,7 +30,7 @@ from unittest.mock import patch
 from job_agent.services.job_repository import JobRepository
 from job_agent.services.profile_onboarding import ProfileOnboardingInput, switch_to_new_profile
 from job_agent.services.profile_recovery import recover_interrupted_profile_switch
-root = Path(sys.argv[1])
+root = Path(sys.argv[1]).resolve()
 phase = sys.argv[2]
 private = root / "private"
 profile = private / "profile.json"
@@ -68,7 +68,8 @@ with patch.object(Path, "replace", replace), patch.object(repository, "backup_an
 class ProfileRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # Match Settings: Windows TEMP may contain an 8.3 short-name alias.
+        self.root = Path(self.temp.name).resolve()
         self.private = self.root / "private"
         self.profile = self.private / "profile.json"
         self.output = self.root / "output"

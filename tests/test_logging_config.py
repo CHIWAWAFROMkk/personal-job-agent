@@ -11,7 +11,7 @@ from job_agent.services.logging_config import configure_logging
 class LoggingConfigTests(unittest.TestCase):
     def test_configure_logging_creates_file_and_logs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            log_dir = Path(tmp_dir) / "custom_logs"
+            log_dir = Path(tmp_dir).resolve() / "custom_logs"
             log_path = configure_logging(log_dir=log_dir, log_file_name="test.log")
             self.assertTrue(log_path.is_file() or log_dir.is_dir())
 
@@ -33,7 +33,7 @@ class LoggingConfigTests(unittest.TestCase):
 
     def test_configure_logging_avoids_duplicate_handlers(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            log_dir = Path(tmp_dir) / "dup_logs"
+            log_dir = Path(tmp_dir).resolve() / "dup_logs"
             path1 = configure_logging(log_dir=log_dir, log_file_name="dup.log")
             initial_count = len(logging.getLogger().handlers)
             path2 = configure_logging(log_dir=log_dir, log_file_name="dup.log")
